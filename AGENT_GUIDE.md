@@ -48,6 +48,31 @@
 1.  **Baseline (Traditional ARIMA)**:
     *   Univariate time series forecasting using only historical sales.
 
+### 4. Implementation Status (Updated: 2026-03-06)
+
+#### Core Logic (`src/models/improved_arima.py`)
+*   **Implemented**: `ImprovedARIMA` class.
+*   **Feature A - Dynamic Parameters**: Automatically selects (1,0,1), (2,1,2), or (3,1,3) based on volatility (CV).
+*   **Feature B - External Factors**: Integrates Seasonality (S_index), Temperature, Rainfall, and Flu rates (ILI%).
+*   **Feature C - Validity Decay**: Implements inventory risk control via `entropy_weight_decay` function ($\alpha = \alpha_0 \times (1 + \beta \times CV')$).
+
+#### Data Generator (`src/core/generator.py`)
+*   **Implemented**: `DataGenerator` class.
+*   **Logic**: Generates synthetic sales data driven by specific external factors (supporting Hypothesis H1) and simulates "Naive Replenishment" to generate realistic inventory pain points (Stockouts/Waste).
+
+#### UI Architecture (`src/ui/`)
+Adheres to PySide6 + Matplotlib standard.
+*   `src/ui/validation/`: Forward model validation tools.
+*   `src/ui/generation/`: Dataset generation tools (Planned).
+*   `src/ui/common/`: Shared widgets (e.g., PlotWidget).
+*   **Threading**: Application logic runs in background `QThread` (e.g., `ModelWorker`) to keep UI responsive.
+
+### 5. Changelog
+*   **2026-03-06**: 
+    *   Restructured UI into `validation` and `generation` modules.
+    *   Implemented `ImprovedARIMA` model with strict adherence to thesis logic.
+    *   Implemented `DataGenerator` core logic.
+
 2.  **Improved Model (ARIMAX + Decay)**:
     *   **External Regressors (Based on Drug Volatility)**:
         *   **Low Volatility**: Seasonality Index ($S_{index}$).

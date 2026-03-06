@@ -11,10 +11,10 @@ import pandas as pd
 import numpy as np
 
 # Adjust path for local imports
-sys.path.append(str(Path(__file__).resolve().parents[2]))
+sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.models import ImprovedARIMA
-from src.ui.components import PlotWidget
+from src.ui.common.widgets import PlotWidget
 from src.core import constants as C
 from src.evaluation import calculate_mape, calculate_rmse
 
