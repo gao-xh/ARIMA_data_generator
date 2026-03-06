@@ -37,6 +37,7 @@ class DataGenerator:
         
         # Normalize index first
         self._normalize_external_factors()
+        self._normalize_drug_info()
         
         if C.COL_DATE in self.external_factors.columns:
             self.start_date = pd.to_datetime(self.external_factors[C.COL_DATE]).min()
@@ -48,7 +49,13 @@ class DataGenerator:
         
         # Ensure external factors are indexed by date
         if C.COL_DATE in self.external_factors.columns:
-            self.external_factors[C.COL_DATE] = pd.to_datetime(self.external_factors[C.COL_DATE])
+            # Handle YYYYMMDD integer/string format explicitly
+            try:
+                self.external_factors[C.COL_DATE] = pd.to_datetime(self.external_factors[C.COL_DATE].astype(str), format='%Y%m%d')
+            except ValueError:
+                # Fallback to standard parsing if format mismatch
+                self.external_factors[C.COL_DATE] = pd.to_datetime(self.external_factors[C.COL_DATE])
+                
             self.external_factors.set_index(C.COL_DATE, inplace=True)
             self.external_factors.sort_index(inplace=True)
         elif self.external_factors.index.name == C.COL_DATE:
@@ -77,7 +84,12 @@ class DataGenerator:
         }
         self.external_factors.rename(columns=mapping, inplace=True)
 
-
+    def _normalize_drug_info(self):
+        """Standardize column names for drug info."""
+        if '药品编号' in self.drugs.columns and C.COL_DRUG_CODE not in self.drugs.columns:
+            self.drugs.rename(columns={'药品编号': C.COL_DRUG_CODE}, inplace=True)
+            logger.info("Successfully renamed column '药品编号' to '药品编码'")
+            
     def _categorize_drugs(self):
         """Helper to calculate CV and categorize drugs if missing."""
         logger.info("Categorizing drugs based on simulated CV...")
@@ -93,9 +105,8 @@ class DataGenerator:
         Main entry point to generate the full dataset for all clinics.
         """
         if not clinics:
-            # Default 7 clinics from context
             clinics = [f"Clinic_{i}" for i in range(1, 8)]
-            
+
         all_records = []
         total_steps = len(clinics) * len(self.drugs)
         current_step = 0
@@ -103,7 +114,9 @@ class DataGenerator:
         logger.info(f"Starting simulation for {len(clinics)} clinics over {len(self.external_factors)} days.")
 
         for clinic in clinics:
-            for _, drug in self.drugs.iterrows():
+            # Sort drugs to be consistent
+            sorted_drugs = self.drugs.sort_values('药品编码')
+            for _, drug in sorted_drugs.iterrows():
                 drug_records = self._simulate_single_drug(clinic, drug)
                 all_records.extend(drug_records)
                 current_step += 1
@@ -111,6 +124,24 @@ class DataGenerator:
                     logger.info(f"Progress: {current_step}/{total_steps} drug-clinic pairs simulated.")
                     
         dataset = pd.DataFrame(all_records)
+        
+        # Ensure column order matches template
+        # Template: 序号,药品编码,日期,当日销量（单位）,当日期初库存,当日期末库存,当日补货量,缺货标记,损耗数量,所属诊所
+        dataset = dataset.assign(序号=range(1, len(dataset) + 1))
+        
+        desired_order = [
+            C.COL_INDEX, C.COL_DRUG_CODE, C.COL_DATE, C.COL_SALES, 
+            C.COL_INV_START, C.COL_INV_END, C.COL_REPLENISH, 
+            C.COL_STOCKOUT, C.COL_LOSS, C.COL_CLINIC
+        ]
+        
+        # Select and reorder columns (fill if missing, though they shouldn't be)
+        for col in desired_order:
+            if col not in dataset.columns:
+                dataset[col] = 0 # Default if logic missed it
+                
+        dataset = dataset[desired_order]
+        
         return dataset
 
     def _simulate_single_drug(self, clinic: str, drug: pd.Series) -> List[Dict[str, Any]]:

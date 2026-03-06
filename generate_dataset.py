@@ -70,8 +70,10 @@ def main():
         output_path = Path(C.FILE_SYNTHETIC_SALES)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Standard CSV output (Header + Data only), skipping type annotation row from template
         full_dataset.to_csv(output_path, index=False, encoding='utf-8-sig')
         logger.info(f"Successfully generated dataset at: {output_path}")
+
         logger.info(f"Total Records: {len(full_dataset)}")
         
     except Exception as e:

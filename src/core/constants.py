@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 
 # Column Names for clarity and reusability
+COL_INDEX = '序号'
 COL_DATE = '日期'
 COL_CLINIC = '所属诊所'
 COL_DRUG_CODE = '药品编码'
@@ -33,8 +34,10 @@ DEFAULT_PROCESSED_DATA = "data/processed"
 
 FILE_DRUG_INFO = os.path.join(DEFAULT_DATA_LIB, "drug_info.csv")
 FILE_EXTERNAL_FACTORS = os.path.join(DEFAULT_DATA_LIB, "external_factors.csv")
+FILE_SALES_TEMPLATE = os.path.join(DEFAULT_DATA_LIB, "sales_inventory_template.csv") # New template
 FILE_SYNTHETIC_SALES = os.path.join(DEFAULT_PROCESSED_DATA, "synthetic_sales.csv")
 
 # Excel Source options (for fallback)
-FILE_DRUG_INFO_XLS = os.path.join(DEFAULT_DATA_LIB, "药品基础信息表.xls")
-FILE_EXTERNAL_FACTORS_XLS = os.path.join(DEFAULT_DATA_LIB, "外部影响因子表.xls")
+DEFAULT_REF_LIB = "ref"
+FILE_DRUG_INFO_XLS = os.path.join(DEFAULT_REF_LIB, "药品基础信息表.xls")
+FILE_EXTERNAL_FACTORS_XLS = os.path.join(DEFAULT_REF_LIB, "外部影响因子表.xls")

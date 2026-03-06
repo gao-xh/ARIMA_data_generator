@@ -36,7 +36,7 @@ class GenerationWorker(QThread):
             generator = DataGenerator(drug_df, ext_df, params=self.params)
             
             # Only simulate ONE clinic for responsiveness in UI preview
-            dataset = generator.generate_batch(clinics=['Clinic_A']) 
+            dataset = generator.generate_full_dataset(clinics=['Clinic_A']) 
             
             # Calculate metrics
             total_sales = dataset[C.COL_SALES].sum()

@@ -2,113 +2,86 @@
 
 > **Note**: This guide serves as the "source of truth" for AI agents and developers working on the ARIMA Inventory Prediction project.
 
-### 1. Project Overview
+## 1. Project Overview
 **Project Name**: ARIMA Inventory Prediction (Med-Inventory-Forecast)
-**Goal**: Optimize pharmaceutical inventory management for community clinics by comparing **Traditional ARIMA** vs. **Improved ARIMA (ARIMAX)** models. The improved model incorporates external factors (weather, flu trends, holidays) and dynamic parameter adjustment to reduce stockouts and waste.
+**Goal**: Optimize pharmaceutical inventory management for community clinics by comparing **Traditional ARIMA** vs. **Improved ARIMA (ARIMAX)** models.
 
 *   **Core Context**:
-    *   **Problem**: Base-level clinics face fluctuating demand for common drugs, leading to inventory imbalance (stockouts/overstock).
-    *   **Solution**: A "Lightweight, High-Precision" forecasting model.
-    *   **Hypothesis**: Improved ARIMA (with external regressors & validity decay) > Traditional ARIMA.
-*   **Workspace Structure**:
-    *   `src/`: Core logic and helper functions (`data_simulator.py`, `models.py`, `config.py`).
-    *   `data lib/`: Raw reference data (External factors, Drug info).
-    *   `data/processed/`: Generated datasets (`synthetic_sales.csv`).
-    *   `ref/`: Reference documents and target requirements.
-    *   `generate_dataset.py`: Entry point for data simulation.
-    *   `AGENT_GUIDE.md`: Project guide.
+    *   **Problem**: Base-level clinics face fluctuating demand, leading to stockouts or waste.
+    *   **Solution**: Improved ARIMA with external factors (flu, weather) & dynamic parameters.
+*   **Current State**: 
+    *   **Phase**: UI Implementation & Validation COMPLETE.
+    *   **Next Step**: Paper writing / Final testing.
 
-### 2. Development Standards
-*   **Language**: Python 3.x
-*   **Libraries**: `pandas`, `numpy`, `statsmodels` (for ARIMA/SARIMAX), `pmdarima` (optional auto-arima), `matplotlib`/`seaborn`.
-*   **Code Comments**: **MUST BE IN ENGLISH**. No Chinese characters in the source code files (to avoid encoding issues and maintain standard).
-*   **Docstrings**: Use Google or NumPy style docstrings.
-*   **Type Hinting**: Strongly encouraged for all public functions in `src/`.
-*   **Paths**: Use `os.path` or `pathlib` for cross-platform compatibility. **NEVER** hardcode absolute paths.
+## 2. Directory Structure (Updated)
 
-### 3. Architecture & Key Logic (Planned)
+```
+ARIMA/
+├── data lib/               # Processed Input Data (CSV) and Template
+│   ├── drug_info.csv
+│   ├── external_factors.csv
+│   └── sales_inventory_template.csv
+├── ref/                    # Archived Raw Excel Files
+├── data/                   # Generated Data Storage
+│   └── processed/          # output of generate_dataset.py
+├── src/
+│   ├── core/               # Core Logic
+│   │   ├── generator.py    # Synthetic Data Simulation Logic (CLI & GUI)
+│   │   ├── constants.py    # Global Config
+│   ├── models/             # Modeling
+│   │   └── improved_arima.py # Main Algorithm Implementation
+│   ├── ui/                 # PySide6 GUI
+│   │   ├── common/         # Shared Widgets (Plots, Sliders)
+│   │   ├── generation/     # Data Generator Tab
+│   │   ├── validation/     # Model Validation Tab
+│   │   └── main_window.py  # App Entry Point
+│   └── evaluation/         # Metrics (MAPE, RMSE, R2)
+├── run_app.bat             # [Execution] One-click start script
+├── clean_setup.bat         # [Maintenance] Environment reset script
+└── AGENT_GUIDE.md          # This file
+```
 
-#### A. Data Pipeline (`src/data_loader.py` & `src/preprocessing.py`)
-1.  **Ingestion**:
-    *   Load `销量库存业务表` (Sales & Inventory Transaction Data).
-    *   Load `外部影响因子表` (External Factors: Weather, Flu, Holidays).
-    *   Load `药品基础信息表` (Drug Master Data: Categories, Validity).
-2.  **Preprocessing & Merging**:
-    *   **Aggregation**: Aggregate sales data by `Date` + `Drug ID` + `Clinic ID` (Daily Granularity).
-    *   **Imputation**: Handle missing dates (fill with 0 for sales, linear interpolation for stock if needed).
-    *   **Feature Engineering**:
-        *   Merge External Factors (Weather, Flu) to the main time series.
-        *   Create "Lag" features if necessary for ARIMAX.
-        *   Encode Categorical variables (e.g., Holidays, Season).
-3.  **Dataset Generation**:
-    *   Output: A clean, merged "Wide Table" or "Time Series formatted" CSV for modeling.
+## 3. Key Implementations
 
-#### B. Modeling Strategy (`src/models.py`)
+### A. Improved ARIMA Model (`src/models/improved_arima.py`)
+Implementation fully compliant with thesis requirements:
+1.  **Dynamic Orders**:
+    *   Low Volatility (CV < 0.2) -> $(1,0,1)$
+    *   Mid Volatility (0.2 ≤ CV ≤ 0.5) -> $(2,1,2)$
+    *   High Volatility (CV > 0.5) -> $(3,1,3)$
+2.  **External Factors (Exogenous Variables)**:
+    *   Integrates **Seasonality Index ($S_{index}$)**.
+    *   Integrates **Temperature** and **Flu Rates (ILI%)**.
+3.  **Validity Decay**:
+    *   Formula: $\alpha = \alpha_0 \times (1 + 0.2 \times CV')$
+    *   Reduces forecast quantity when drug is near expiry (30-90 days).
 
-1.  **Baseline (Traditional ARIMA)**:
-    *   Univariate time series forecasting using only historical sales.
-
-### 4. Implementation Status (Updated: 2026-03-06)
-
-#### Core Logic (`src/models/improved_arima.py`)
-*   **Implemented**: `ImprovedARIMA` class.
-*   **Feature A - Dynamic Parameters**: Automatically selects (1,0,1), (2,1,2), or (3,1,3) based on volatility (CV).
-*   **Feature B - External Factors**: Integrates Seasonality (S_index), Temperature, Rainfall, and Flu rates (ILI%).
-*   **Feature C - Validity Decay**: Implements inventory risk control via `entropy_weight_decay` function ($\alpha = \alpha_0 \times (1 + \beta \times CV')$).
-
-#### Data Generator (`src/core/generator.py`)
-*   **Implemented**: `DataGenerator` class.
-*   **Logic**: Generates synthetic sales data driven by specific external factors (supporting Hypothesis H1) and simulates "Naive Replenishment" to generate realistic inventory pain points (Stockouts/Waste).
-
-#### UI Architecture (`src/ui/`)
-Adheres to PySide6 + Matplotlib standard.
-*   `src/ui/validation/`: Forward model validation tools.
-*   `src/ui/generation/`: Dataset generation tools (Planned).
-*   `src/ui/common/`: Shared widgets (e.g., PlotWidget).
-*   **Threading**: Application logic runs in background `QThread` (e.g., `ModelWorker`) to keep UI responsive.
-
-### 5. Changelog
-*   **2026-03-06**: 
-    *   Restructured UI into `validation` and `generation` modules.
-    *   Implemented `ImprovedARIMA` model with strict adherence to thesis logic.
-    *   Implemented `DataGenerator` core logic.
-
-2.  **Improved Model (ARIMAX + Decay)**:
-    *   **External Regressors (Based on Drug Volatility)**:
-        *   **Low Volatility**: Seasonality Index ($S_{index}$).
-        *   **Mid Volatility**: $S_{index}$ + Temp + Rain + Flu Rate.
-        *   **High Volatility**: All factors.
-    *   **Dynamic Parameters (AIC Optimized)**:
-        *   Low: $(1,0,1)$
-        *   Mid: $(2,1,2)$
-        *   High: $(3,1,3)$
-    *   **Validity Decay Coefficient ($\alpha$)**:
-        *   Formula: $\hat{Y}_{final} = \hat{Y}_{ARIMAX} \times \alpha$
-        *   $\alpha = \alpha_0 \times (1 + 0.2 \times CV')$
-        *   $\alpha_0$: 1.0 (>90 days), 0.8 (30-90 days), 0.5 (<30 days).
-
-#### C. Evaluation (`src/evaluation.py`)
-*   **Metrics**: MAPE (Mean Absolute Percentage Error), RMSE, Stockout Rate, Turnover Days.
-*   **Validation**: Train/Test split (e.g., 2024 for training, 2025 for testing).
-
-### 4. Implementation Steps (Current Phase)
-
-#### Phase 1: Dataset Generation (Current Task)
-*   **Goal**: Create a robust `DatasetGenerator` class.
-*   **Input**: The 3 raw Excel files.
+### B. Data Generator (`src/core/generator.py`)
+Generates synthetic data to prove **Hypothesis H1** (External factors affect sales).
 *   **Logic**:
-    *   Read files using correct engines (`xlrd` for .xls, `openpyxl` for .xlsx).
-    *   Clean column names (strip whitespace).
-    *   Convert dates to standard `datetime` objects.
-    *   Perform Left Join: `Sales` + `Drug Info` (on Drug Code).
-    *   Perform Left Join: `Result` + `External Factors` (on Date).
-    *   Handle missing values (e.g., fill NaNs in sales with 0, propagate external factors).
-*   **Output**: `data/processed/merged_dataset.csv`.
+    *   Base Demand: Poisson Distribution.
+    *   **Flu Shock**: If Flu Rate > Threshold (5%), demand spikes exponentially.
+    *   **Cold Shock**: If Temp < Threshold (5°C), demand increases (1.5x).
+    *   **Naive Replenishment**: Simulates a "dumb" reordering policy (Review every 14 days) to intentionally create stockouts/waste for the model to fix.
 
-### 5. Critical Watchlist (Pitfalls to Avoid)
+### C. UI Architecture (`src/ui/`)
+*   **Framework**: `PySide6` with `Matplotlib`.
+*   **Features**:
+    *   **Modular**: Split into `GenerationWidget` and `ValidationWidget`.
+    *   **Threaded**: Heavy tasks run in `QThread` to prevent UI freezing.
+    *   **Styled**: Custom QSS for a professional look.
 
-1.  **Date Alignment**: Ensure "Date" columns in all files are parsed correctly (Check for different formats like `YYYYMMDD` vs `YYYY-MM-DD`).
-2.  **Granularity**: The code must handle the "Clinic" dimension. Predictions might be needed *per clinic* or *aggregated*. Default to supporting *per clinic* granularity.
-3.  **Encoding Issues**: When reading Excel files with Chinese characters, ensure pandas reads them correctly (usually auto-detected, but be watchful).
-4.  **Separation of Concerns**:
-    *   Don't mix data cleaning visualization (plots) inside the data loader functions. Keep `src/` files pure logic.
+## 4. Environment & Deployment
+*   **Management**: `.venv` (Python 3.10+).
+*   **Startup**: Always use `run_app.bat`. It handles venv creation, pip install, and execution.
+*   **Troubleshooting**: Use `clean_setup.bat` to wipe the environment if imports fail.
+
+## 5. Changelog
+*   **2026-03-06**:
+    *   Refactored UI to support Tabbed Layout (Generation + Validation).
+    *   Added `GenerationWidget` with slider controls for simulation parameters.
+    *   Fixed `statsmodels` warning regarding Date Index.
+    *   Converted `README.md` to Chinese for localization.
+    *   **Data Cleanup**: Moved raw Excel files to `ref/`, standardized `data lib/` to CSV only.
+    *   **Generator Update**: `generate_dataset.py` now outputs strict template-compliant CSV format (no type row).
+    *   Pushed to GitHub `master` branch.
