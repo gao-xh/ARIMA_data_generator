@@ -1,5 +1,6 @@
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 import numpy as np
+from typing import Dict
 
 def calculate_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Mean Absolute Percentage Error. Handles zeros.

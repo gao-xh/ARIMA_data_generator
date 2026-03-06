@@ -110,6 +110,16 @@ class ImprovedARIMA:
                    # For missing columns (e.g. Rain/Flu), fill with 0 or mean? 0 is safer default if missing.
                    df[col] = 0.0
                    
+        # Set Date as Index for ARIMA
+        df = df.set_index(C.COL_DATE)
+        
+        # Try to infer frequency if possible (e.g. Daily 'D')
+        try:
+             df = df.asfreq(pd.infer_freq(df.index))
+             df = df.fillna(method='ffill') # Forward fill missing dates if gap
+        except:
+             pass # If fails, just use index as is
+             
         return df
 
     def train(self, train_df: pd.DataFrame):
@@ -125,9 +135,7 @@ class ImprovedARIMA:
             # Order is defined in __init__
             # statsmodels ARIMA handles indices for time series
             if isinstance(data.index, pd.DatetimeIndex):
-                 # Set frequency if possible, or just pass arrays
-                 freq = pd.infer_freq(data.index)
-                 self.model = ARIMA(endog, exog=exog, order=self.order, freq=freq)
+                 self.model = ARIMA(endog, exog=exog, order=self.order)
             else:
                  self.model = ARIMA(endog, exog=exog, order=self.order)
                  
@@ -177,8 +185,11 @@ class ImprovedARIMA:
         if not pd.api.types.is_datetime64_any_dtype(future_exog[C.COL_DATE]):
             future_exog[C.COL_DATE] = pd.to_datetime(future_exog[C.COL_DATE])
             
+        # Set index to align with model expectations
+        future_exog = future_exog.set_index(C.COL_DATE)
+            
         # Apply Saved S_index
-        future_exog['Month'] = future_exog[C.COL_DATE].dt.month
+        future_exog['Month'] = future_exog.index.month
         # Use existing map or default to 1.0
         s_map = getattr(self, 's_index_map', {m: 1.0 for m in range(1, 13)})
         future_exog['S_index'] = future_exog['Month'].map(s_map).fillna(1.0)

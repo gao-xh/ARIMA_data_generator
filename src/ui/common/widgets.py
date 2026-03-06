@@ -1,10 +1,96 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QSizePolicy
+    QWidget, QVBoxLayout, QSizePolicy, QHBoxLayout, QLabel, QSlider, QLineEdit, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView
 )
+from PySide6.QtCore import Qt, Signal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 import logging
+
+class SliderInputWidget(QWidget):
+    """
+    A widget that combines a Label, a Slider, and a SpinBox for synchronized input.
+    """
+    valueChanged = Signal(float)
+
+    def __init__(self, label_text, min_val=0.0, max_val=100.0, initial_val=50.0, 
+                 step=1.0, decimals=2, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 1. Label
+        self.label = QLabel(label_text)
+        self.label.setMinimumWidth(100)
+        layout.addWidget(self.label)
+        
+        # Factor to handle float values in integer slider
+        self.factor = 10 ** decimals
+        
+        # 2. Slider
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(int(min_val * self.factor), int(max_val * self.factor))
+        self.slider.setValue(int(initial_val * self.factor))
+        self.slider.setSingleStep(int(step * self.factor))
+        layout.addWidget(self.slider)
+        
+        # 3. SpinBox
+        self.spinbox = QDoubleSpinBox()
+        self.spinbox.setRange(min_val, max_val)
+        self.spinbox.setValue(initial_val)
+        self.spinbox.setSingleStep(step)
+        self.spinbox.setDecimals(decimals)
+        layout.addWidget(self.spinbox)
+        
+        # Connect signals
+        self.slider.valueChanged.connect(self._on_slider_changed)
+        self.spinbox.valueChanged.connect(self._on_spinbox_changed)
+
+    def _on_slider_changed(self, value):
+        float_val = value / self.factor
+        self.spinbox.setValue(float_val)
+        self.valueChanged.emit(float_val)
+
+    def _on_spinbox_changed(self, value):
+        slider_val = int(value * self.factor)
+        if self.slider.value() != slider_val:
+            self.slider.setValue(slider_val)
+        self.valueChanged.emit(value)
+        
+    def value(self):
+        return self.spinbox.value()
+
+class MetricsTableWidget(QTableWidget):
+    """
+    A simple table to display key-value metrics like Variance, MAPE, RMSE.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setColumnCount(2)
+        self.setHorizontalHeaderLabels(["Metric", "Value"])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.verticalHeader().setVisible(False)
+        self.setAlternatingRowColors(True)
+        
+    def update_metrics(self, metrics_dict):
+        """
+        Updates the table with a dictionary of metrics.
+        """
+        self.setRowCount(len(metrics_dict))
+        for row, (key, value) in enumerate(metrics_dict.items()):
+            key_item = QTableWidgetItem(str(key))
+            key_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable) # Read-only
+            
+            if isinstance(value, float):
+                val_str = f"{value:.4f}"
+            else:
+                val_str = str(value)
+                
+            val_item = QTableWidgetItem(val_str)
+            val_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            
+            self.setItem(row, 0, key_item)
+            self.setItem(row, 1, val_item)
 
 class MplCanvas(FigureCanvas):
     """

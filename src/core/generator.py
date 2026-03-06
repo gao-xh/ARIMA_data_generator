@@ -24,9 +24,16 @@ class DataGenerator:
         external_factors (pd.DataFrame): Time backbone (Temperature, ILI%).
     """
 
-    def __init__(self, drug_df: pd.DataFrame, external_factors_df: pd.DataFrame):
+    def __init__(self, drug_df: pd.DataFrame, external_factors_df: pd.DataFrame, 
+                 params: Optional[Dict[str, float]] = None):
         self.drugs = drug_df.copy()
         self.external_factors = external_factors_df.copy()
+        self.params = params or {
+            'flu_threshold': 5.0,
+            'flu_impact_factor': 0.2,
+            'temp_threshold': 5.0,
+            'base_replenishment_days': 14
+        }
         
         # Normalize index first
         self._normalize_external_factors()
@@ -142,12 +149,19 @@ class DataGenerator:
             # Apply External Shocks for Sensitive Drugs
             if category == C.FLUC_HIGH or category == C.FLUC_MED:
                 # Flu Impact: If ILI% > threshold (e.g. 5%), boost sales
-                if flu_rate > 5.0:
+                flu_threshold = self.params.get('flu_threshold', 5.0)
+                flu_impact = self.params.get('flu_impact_factor', 0.2)
+                
+                if flu_rate > flu_threshold:
                     # Exponential boost based on severity
-                    boost = 1 + (flu_rate - 5.0) * 0.2  # e.g., rate=10 -> 1 + 1 = 2x sales
+                    boost = 1 + (flu_rate - flu_threshold) * flu_impact  # e.g., rate=10 -> 1 + 1 = 2x sales
                     daily_sales *= boost
                 
                 # Temperature Impact: Cold shocks boost demand
+                temp_thresh = self.params.get('temp_threshold', 5.0)
+                if temp < temp_thresh:
+                    # Factor 1.5x on cold days
+                    daily_sales *= 1.5
                 if temp < 5:
                     daily_sales *= 1.3
             

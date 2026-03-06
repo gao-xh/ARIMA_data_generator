@@ -14,9 +14,10 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[3]))
 
 from src.models import ImprovedARIMA
-from src.ui.common.widgets import PlotWidget
+from src.ui.common.widgets import PlotWidget, MetricsTableWidget
 from src.core import constants as C
 from src.evaluation import calculate_mape, calculate_rmse
+from sklearn.metrics import explained_variance_score, r2_score
 
 class ModelWorker(QThread):
     finished = Signal(object, object, object, dict) # dates, actuals, forecast, metrics
@@ -70,32 +71,43 @@ class ModelWorker(QThread):
             actuals = test_ready[C.COL_SALES].values
             mape = calculate_mape(actuals, forecast)
             rmse = calculate_rmse(actuals, forecast)
+            r2 = r2_score(actuals, forecast) if len(actuals) > 1 else 0
+            variance_explained = explained_variance_score(actuals, forecast) if len(actuals) > 1 else 0
             
-            metrics = {'MAPE': f"{mape:.2f}%", 'RMSE': f"{rmse:.2f}"}
+            metrics = {
+                'MAPE': f"{mape:.2f}%", 
+                'RMSE': f"{rmse:.2f}",
+                'R² Score': f"{r2:.4f}",
+                'Explained Variance': f"{variance_explained:.4f}"
+            }
             
             self.finished.emit(test_ready[C.COL_DATE], actuals, forecast, metrics)
+
             
         except Exception as e:
             self.error.emit(str(e))
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Improved ARIMA - Forward Validation Tool")
-        self.resize(1200, 800)
+class ValidationWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # self.setWindowTitle("Improved ARIMA - Forward Validation Tool") # Managed by Parent
+        # self.resize(1200, 800)
         
         self.df_full = None
         self.current_drug_info = None
         
         # UI Setup
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
+        # central_widget = QWidget() # Removed for QWidget inheritance
+        # self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(self) # Directly on self
+        
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter)
         
         # --- Left Panel: Controls ---
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        left_panel.setFixedWidth(300)
+        # left_panel.setFixedWidth(300) # Remove fixed width to allow resizing
         
         # 1. Data Loading
         grp_data = QGroupBox("Data Source")
@@ -146,23 +158,34 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(grp_select)
         left_layout.addWidget(grp_params)
         left_layout.addWidget(self.btn_run)
+        
+        # Result Table (as requested for Variance/Fit stats)
+        self.metrics_table = MetricsTableWidget()
+        left_layout.addWidget(QLabel("Validation Results:"))
+        left_layout.addWidget(self.metrics_table)
+        
         left_layout.addStretch()
         
         # --- Right Panel: Visualization ---
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
+        right_panel = QSplitter(Qt.Vertical)
         
         self.plot_widget = PlotWidget()
-        right_layout.addWidget(self.plot_widget)
+        right_panel.addWidget(self.plot_widget)
         
         # Logs/Output
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(150)
-        right_layout.addWidget(self.log_output)
+        # self.log_output.setMaximumHeight(150) # Allow resizing
+        right_panel.addWidget(self.log_output)
         
-        main_layout.addWidget(left_panel)
-        main_layout.addWidget(right_panel)
+        # Set stretch: Plot takes most space
+        right_panel.setStretchFactor(0, 4)
+        right_panel.setStretchFactor(1, 1)
+
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 7)
         
         self.log("System Ready. Please load a dataset.")
 
@@ -242,6 +265,9 @@ class MainWindow(QMainWindow):
         self.btn_run.setEnabled(True)
         self.log(f"Validation Complete using Improved ARIMA.")
         self.log(f"Metrics: {metrics}")
+        
+        # New: Update Metrics Table
+        self.metrics_table.update_metrics(metrics)
         
         self.plot_widget.plot(
             dates, actuals, forecast, 
