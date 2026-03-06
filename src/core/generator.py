@@ -27,11 +27,17 @@ class DataGenerator:
     def __init__(self, drug_df: pd.DataFrame, external_factors_df: pd.DataFrame):
         self.drugs = drug_df.copy()
         self.external_factors = external_factors_df.copy()
-        self.start_date = self.external_factors[C.COL_DATE].min()
-        self.end_date = self.external_factors[C.COL_DATE].max()
         
-        # Normalize index
+        # Normalize index first
         self._normalize_external_factors()
+        
+        if C.COL_DATE in self.external_factors.columns:
+            self.start_date = pd.to_datetime(self.external_factors[C.COL_DATE]).min()
+            self.end_date = pd.to_datetime(self.external_factors[C.COL_DATE]).max()
+        else:
+            # Fallback if date is index
+             self.start_date = self.external_factors.index.min()
+             self.end_date = self.external_factors.index.max()
         
         # Ensure external factors are indexed by date
         if C.COL_DATE in self.external_factors.columns:

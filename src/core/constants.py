@@ -24,3 +24,17 @@ EXT_HOLIDAY = '节假日'
 FLUC_HIGH = '高波动'
 FLUC_MED = '中波动'
 FLUC_LOW = '低波动'
+
+# File Paths (Relative to project root)
+# Using forward slashes for cross-platform compatibility
+import os
+DEFAULT_DATA_LIB = "data lib"
+DEFAULT_PROCESSED_DATA = "data/processed"
+
+FILE_DRUG_INFO = os.path.join(DEFAULT_DATA_LIB, "drug_info.csv")
+FILE_EXTERNAL_FACTORS = os.path.join(DEFAULT_DATA_LIB, "external_factors.csv")
+FILE_SYNTHETIC_SALES = os.path.join(DEFAULT_PROCESSED_DATA, "synthetic_sales.csv")
+
+# Excel Source options (for fallback)
+FILE_DRUG_INFO_XLS = os.path.join(DEFAULT_DATA_LIB, "药品基础信息表.xls")
+FILE_EXTERNAL_FACTORS_XLS = os.path.join(DEFAULT_DATA_LIB, "外部影响因子表.xls")
