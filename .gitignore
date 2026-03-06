@@ -1,0 +1,21 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+*.log
+*.sqlite
+*.db
+.DS_Store
+.vscode/
+
+# Local data files
+data/
+data lib/
+ref/
+temp/
+output/
