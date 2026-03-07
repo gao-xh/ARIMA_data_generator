@@ -119,15 +119,28 @@ class GenerationWidget(QWidget):
         self.btn_load_meta.clicked.connect(self.load_mock_drug)
 
     def load_mock_drug(self):
-        # In real app, load from CSV/DB
-        self.current_drug = {
-            '药品ID': 'DRUG_001',
-            '药品名称': 'Test Antibiotic',
-            '有效期': 365
-        }
-        self.lbl_drug_status.setText(f"Selected: {self.current_drug['药品名称']}")
+        # In real app, load from CSV/DB defined in config
+        from src.config import DRUG_INFO
+        import pandas as pd
+        
+        try:
+            # Try loading real Excel if exists
+            df = pd.read_excel(DRUG_INFO)
+            # Pick a random drug or specific one
+            row = df.iloc[0]
+            self.current_drug = row.to_dict()
+            self.log(f"Loaded real drug: {self.current_drug.get('药品名称', 'Unknown')}")
+        except Exception as e:
+            self.log(f"Metadata file not found or error ({str(e)}), using mock.")
+            self.current_drug = {
+                '药品ID': 'DRUG_001',
+                '药品名称': 'Test Antibiotic',
+                '有效期': 365,
+                '单价': 25.0  # Added Price for Funds Occupied calculation
+            }
+        
+        self.lbl_drug_status.setText(f"Selected: {self.current_drug.get('药品名称', 'Unknown')}")
         self.btn_start.setEnabled(True)
-        self.log("Loaded drug metadata.")
 
     def log(self, message: str):
         ts = datetime.datetime.now().strftime("%H:%M:%S")

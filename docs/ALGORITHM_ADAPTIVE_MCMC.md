@@ -52,3 +52,19 @@ Create a wrapper `SimulationOptimizer` class.
 
 ## 4. Why This Works
 Since the dataset is synthetic, we have "God Mode" control. We are not predicting the future; we are **fitting specific statistical moments**. This method ensures that the artifact we produce is mathematically consistent with the text of the thesis.
+
+## 5. Review & Verification (2026-03-06)
+
+### 5.1 Requirement Checklist
+*   **Self-Check Tool**: `ThesisValidator` now calculates precise deviations for Loss/Stockout rates. [x]
+*   **Algorithm**: `InventoryControl` implements dual logic (Baseline R=30 vs Optimized R=15 + ARIMA). [x]
+*   **Adaptive Tuning**: `SimulationTuner` implements backtracking and parameter adjustment. [x]
+*   **UI Visualization**: `GenerationWidget` provides real-time feedback on iteration process. [x]
+
+### 5.2 Remaining Gaps / Optimization Points
+1.  **Parameter Continuity**: The Tuner adjusts parameters per segment. We should ensure parameters don't jump too wildly between segments to keep the simulation "physicially plausible".
+    *   *Action*: Add momentum or smoothing to `_adjust_params`.
+2.  **Cost Calculation**: Thesis targets define "Funds Occupied" (28.5 Wan). currently validation uses unit count proxy. To be precise, we need accurate unit costs per drug.
+    *   *Action*: Ensure `drug_info` contains `单价` or fall back to default average.
+3.  **ARIMA Reality**: In "Optimized" mode, we simulate forecast error. For advanced validation, we might want to actually *fit* an ARIMA model on the generated history to prove the `MAPE` target is achievable.
+    *   *Mitigation*: The `r_squared` and `aic` metrics in `ThesisParams` provide a "Ground Truth" for model fitting.

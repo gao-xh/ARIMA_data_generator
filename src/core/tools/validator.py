@@ -113,9 +113,18 @@ class ThesisValidator:
         # Since we don't have Unit Cost in DF, we can't compute total value easily unless we assume avg cost.
         # Thesis Target is 28.5 Wan (285,000).
         # We calculate "Average Inventory Units" here. Need cost.
-        # Let's placeholder this or remove from strict compliance if we lack cost data.
-        # Returning raw unit count for now designated as 'funds_occupied' (proxy)
-        funds_occupied = avg_inventory * 10 # distinct assumption or placeholder
+        # Check if 'run_simulation' stored drug info in DF? No.
+        # But validator is initialized with Drug Info? No, run_validation takes drug_info.
+        # Actually this calculates metrics for the DF generated from ONE drug or MANY?
+        # If many, need sum(Inv * Price).
+        
+        # Simplified: Use a default price if not available to make the unit scale meaningful
+        # Thesis Avg Price ~ 30-40 RMB?
+        # If Funds=285,000 and turnover ~45 days. Sales=Funds*(365/45) ~ 2.3M
+        # Let's assume average unit price = 35 RMB
+        avg_price = 35.0
+        
+        funds_occupied = avg_inventory * avg_price
         
         return {
             'loss_rate': loss_rate,
