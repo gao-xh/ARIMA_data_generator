@@ -47,6 +47,9 @@ class InventoryControl:
         
         # Get behavior parameters from ThesisParams
         params = ThesisParams.VOLATILITY_BEHAVIOR.get(self.volatility_cat, ThesisParams.VOLATILITY_BEHAVIOR['MEDIUM'])
+        self.safety_factor = list(params.values())[5] if 'safety_factor' not in params else params['safety_factor'] 
+        # Fallback if TypedDict behavior differs at runtime
+
         
     def get_review_period(self, mode: str) -> int:
         if mode == 'OPTIMIZED':
@@ -206,86 +209,4 @@ class InventoryControl:
                 remaining_demand -= batch['qty']
                 # Batch removed (not appended to updated)
         
-        return satisfied_qty, updated_batches 
-        """
-        review_horizon = self.review_period + self.lead_time
-        
-        # Simplified Statistical Logic:
-        # Expected Demand during Review + Lead Time
-        expected_demand = avg_daily_demand * review_horizon
-        
-        # Safety Stock Buffer
-        # Ideally: Z * std_dev_demand * sqrt(Review + Lead)
-        safety_stock = self.safety_factor * demand_std * np.sqrt(review_horizon)
-        
-        target_level = expected_demand + safety_stock
-        return max(0.0, target_level)
-    
-    def calculate_order_quantity(self, current_inventory: float, pipeline_inventory: float, 
-                               target_level: float,
-                               inventory_batches: List[Dict[str, Any]] = None,
-                               current_day: int = 0) -> float:
-        """
-        Determine actual order quantity based on current position vs target.
-        If batches and day provided, use advanced Thesis Logic (Section 3.3.1).
-        Else fallback to standard (Order-Up-To).
-        """
-        if inventory_batches:
-            # We need to calculate Target Level inside the advanced function as it depends on forecast logic
-            # But here we are passed a target level.
-            # Let's assume target_level passed here is just a placeholder and we re-calculate or 
-            # we need forecast passed in.
-            # Let's stick to the separation: MCMC calls calculate_thesis_order_quantity directly if possible.
-            pass
-
-        inventory_position = current_inventory + pipeline_inventory
-        order_qty = max(0.0, target_level - inventory_position)
-        return order_qty
-
-    def check_expiration(self, inventory_batches: List[Dict[str, Any]], current_day: int) -> Tuple[float, List[Dict[str, Any]]]:
-        """
-        Check for expired items and remove them.
-        Returns: (Loss Quantity, Updated Batches)
-        """
-        expired_qty = 0.0
-        active_batches = []
-        
-        for batch in inventory_batches:
-            # Batch: {'qty': 100, 'entry_day': 50, 'expiry_day': 415}
-            if batch['expiry_day'] <= current_day:
-                expired_qty += batch['qty']
-            else:
-                active_batches.append(batch)
-                
-        return expired_qty, active_batches
-
-    def consume_stock(self, inventory_batches: List[Dict[str, Any]], demand_qty: float) -> Tuple[float, List[Dict[str, Any]]]:
-        """
-        Consume stock for daily demand (FIFO).
-        Returns: (Actual Sales, Updated Batches)
-        """
-        remaining_demand = demand_qty
-        updated_batches = []
-        actual_sales = 0.0
-        
-        # Sort batches by expiry date (FEFO/FIFO) - usually expiry matches entry order roughly
-        sorted_batches = sorted(inventory_batches, key=lambda x: x['expiry_day'])
-        
-        for batch in sorted_batches:
-            if remaining_demand <= 0:
-                updated_batches.append(batch)
-                continue
-                
-            if batch['qty'] > remaining_demand:
-                # Partial consumption
-                batch['qty'] -= remaining_demand
-                actual_sales += remaining_demand
-                remaining_demand = 0
-                updated_batches.append(batch)
-            else:
-                # Full batch consumption
-                actual_sales += batch['qty']
-                remaining_demand -= batch['qty']
-                # Batch is empty, do not re-add
-        
-        return actual_sales, updated_batches
+        return satisfied_qty, updated_batches

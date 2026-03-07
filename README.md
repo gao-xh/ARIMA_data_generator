@@ -25,11 +25,11 @@
 在 "Simulation & Generator" 标签页中调整参数并点击生成。界面主要用于**小规模预览**参数效果。
 
 #### 方法 B: 批处理脚本 (推荐用于模型训练)
-直接运行项目根目录下的 `generate_dataset.py` 脚本，可快速生成全量数据集。
+直接运行项目根目录下的 `src/scripts/generate_thesis_dataset.py` 脚本，可快速生成符合论文逻辑的全量数据集。
 ```bash
-python generate_dataset.py
+python src/scripts/generate_thesis_dataset.py
 ```
-生成的数据将保存在 `data/processed/synthetic_sales.csv`，格式完全符合模板要求。
+生成的数据将保存在 `data/processed/thesis_dataset_final.csv`，格式完全符合模板要求。
 
 *   **参数调节**：
     *   **流感爆发阈值 (Flu Threshold)**：设定流感率达到多少时触发销量激增。

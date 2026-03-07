@@ -1,5 +1,6 @@
 import math
 import random
+import numpy as np
 from typing import Dict, Optional
 
 class CausalImpact:
@@ -135,11 +136,46 @@ class CausalImpact:
         """
         if demand <= 0: return 0
         
-        # Gaussian noise: N(0, sigma)
-        noise_factor = random.gauss(0, sigma)
+        # Adjust sigma minimum for small demand to ensure variation
+        # If mean=5, sigma=0.04 (4%) -> std=0.2 -> No variation after rounding
+        # Target: For mean=5, we want to see occasional 4, 6, 3, 7.
+        # So sigma needs to be at least ~0.15 (15%) for small numbers.
         
-        # Clamp noise to reasonable bounds (e.g., +/- 3 sigma) to avoid negative demand
-        noise_factor = max(-0.8, min(0.8, noise_factor))
+        eff_sigma = max(sigma, 0.15) if demand < 20 else sigma
         
-        final_demand = demand * (1 + noise_factor)
-        return int(round(max(0, final_demand)))
+        try:
+            # 1. Base Noise (Gaussian)
+            noise_factor = np.random.normal(0, eff_sigma)
+            
+            # 2. Burst Event Injection (Lumpy Demand)
+            # Simulate real-world events: Prescription refills, small outbreaks
+            # Probability depends on sigma (higher volatility = more bursts)
+            burst_prob = min(0.1, sigma * 0.2) 
+            if np.random.random() < burst_prob:
+                # Burst Multiplier: 1.5x to 3.0x for normal items
+                # For very low volume (demand < 2), it could be just +1 or +2 units
+                burst_mult = np.random.uniform(1.5, 3.0)
+                noise_factor += (burst_mult - 1.0)
+                
+            # Clamp for stability, but allow higher upside
+            # Lower bound: -0.9 (can almost wipe out demand)
+            # Upper bound: +3.0 (can quadruple demand)
+            noise_factor = max(-0.9, min(3.0, noise_factor))
+            
+            final_val = demand * (1 + noise_factor)
+            final_val = max(0, final_val)
+            
+            # Stochastic Rounding (Crucial for Low Volume Items)
+            # 5.2 -> 20% chance of 6, 80% chance of 5.
+            # This preserves the mean (expected value) over time.
+            floor_val = math.floor(final_val)
+            prob_ceil = final_val - floor_val
+            
+            if np.random.random() < prob_ceil:
+                return int(floor_val + 1)
+            else:
+                return int(floor_val)
+                
+        except Exception:
+            # Fallback
+            return int(round(demand))

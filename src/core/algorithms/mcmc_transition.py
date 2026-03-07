@@ -126,8 +126,9 @@ class MCMC_Transition:
         Returns DataFrame of daily records.
         """
         records = []
+        start_day = self.current_day + 1
         
-        for day in range(1, duration_days + 1):
+        for day in range(start_day, start_day + duration_days):
             self.current_day = day
             date = self.config.start_date + pd.Timedelta(days=day-1)
             
@@ -147,7 +148,7 @@ class MCMC_Transition:
             daily_demand = self.demand_model.generate(date, ext_row, clinic_scale)
             
             # 3. Receive Incoming Orders (Pipeline -> On Hand)
-            self._process_deliveries(day)
+            arrived_today = self._process_deliveries(day)
             
             # 4. Check Expiration (Loss)
             expired_today, self.inventory_batches = self.inventory_control.check_expiration(
@@ -241,6 +242,7 @@ class MCMC_Transition:
                 'demand': daily_demand,
                 'sales': actual_sales,
                 'inventory': current_inv_total,
+                'replenishment': arrived_today,
                 'loss': expired_today,
                 'stockout_flag': 1 if is_stockout else 0,
                 'order_qty': qty_ordered,
@@ -250,12 +252,14 @@ class MCMC_Transition:
             
         return pd.DataFrame(records)
 
-    def _process_deliveries(self, day: int):
+    def _process_deliveries(self, day: int) -> float:
         # Move arrived orders to inventory
         arrived = [o for o in self.pipeline_orders if o['arrival_day'] <= day]
         remaining = [o for o in self.pipeline_orders if o['arrival_day'] > day]
         
+        arrived_qty = 0.0
         for order in arrived:
+            arrived_qty += order['qty']
             # Create new batch
             new_batch = {
                 'qty': order['qty'],
@@ -265,6 +269,7 @@ class MCMC_Transition:
             self.inventory_batches.append(new_batch)
             
         self.pipeline_orders = remaining
+        return arrived_qty
 
     def _place_order(self, qty: float, day: int):
         item_lead = self.inventory_control.lead_time

@@ -89,40 +89,57 @@ class ThesisValidator:
                 'loss_rate': 0.0, 'stockout_rate': 0.0, 'turnover_days': 0.0,
                 'backlog_rate': 0.0, 'funds_occupied': 0.0
             }
-            
-        total_loss = df['loss'].sum()
-        total_sales = df['sales'].sum()
-        avg_inventory = df['inventory'].mean()
-        total_days = len(df['date'].unique()) # Correct day count
-        
-        # Funds Occupied: Avg Inventory * Price
-        if 'unit_price' in df.columns:
-            funds_occupied = (df['inventory'] * df['unit_price']).mean()
-        else:
-            funds_occupied = avg_inventory * 35.0  # Fallback
 
-        # Loss Rate: Loss / (Sales + Loss)
-        throughput = total_sales + total_loss
-        loss_rate = total_loss / throughput if throughput > 0 else 0
-        
-        # Stockout Rate: Days with stockout / Total Drug-Days
-        stockout_days = df['stockout_flag'].sum()
-        stockout_rate = stockout_days / len(df) if len(df) > 0 else 0
-        
-        # Turnover Days: 365 * Avg Inventory / Total Annualized Sales
-        # Daily Sales Rate
-        sales_per_day = total_sales / total_days if total_days > 0 else 0
-        turnover_days = avg_inventory / sales_per_day if sales_per_day > 0 else 0
-        
-        # Backlog Rate (Overstock Rate): Ratio of Days with > 90 Days Supply
-        overstock_threshold = 90 * sales_per_day
-        # If sales per day is 0, everything is overstock if inventory > 0
-        if sales_per_day == 0:
-            overstock_days = len(df[df['inventory'] > 0])
-        else:
-            overstock_days = len(df[df['inventory'] > overstock_threshold])
+        # Calculate Values (Price * Qty)
+        if 'unit_price' not in df.columns:
+            df['unit_price'] = 35.0 # Fallback
             
-        backlog_rate = overstock_days / len(df) if len(df) > 0 else 0
+        # Ensure numeric types
+        df['sales'] = pd.to_numeric(df['sales'], errors='coerce').fillna(0)
+        df['loss'] = pd.to_numeric(df['loss'], errors='coerce').fillna(0)
+        df['inventory'] = pd.to_numeric(df['inventory'], errors='coerce').fillna(0)
+        df['unit_price'] = pd.to_numeric(df['unit_price'], errors='coerce').fillna(35.0)
+
+        df['sales_val'] = df['sales'] * df['unit_price']
+        df['loss_val'] = df['loss'] * df['unit_price']
+        df['inventory_val'] = df['inventory'] * df['unit_price']
+
+        # 1. Loss Rate (Value-based)
+        total_sales_val = df['sales_val'].sum()
+        total_loss_val = df['loss_val'].sum()
+        throughput = total_sales_val + total_loss_val
+        loss_rate = total_loss_val / throughput if throughput > 0 else 0
+        
+        # 2. Daily Totals (Aggregate Hospital Level)
+        daily_stats = df.groupby('date')[['inventory_val', 'sales_val']].sum()
+        avg_inventory_val = daily_stats['inventory_val'].mean()
+        avg_daily_sales_val = daily_stats['sales_val'].mean()
+        
+        # 3. Turnover Days (Days Sales of Inventory)
+        # Turnover Days = Avg Inventory Value / Avg Daily Sales Value
+        turnover_days = avg_inventory_val / avg_daily_sales_val if avg_daily_sales_val > 0 else 0
+        
+        # 4. Funds Occupied (Wan RMB)
+        funds_occupied = avg_inventory_val / 10000.0 # Convert to Wan
+        
+        # 5. Stockout Rate (Rate of Drug-Days with Stockout)
+        stockout_rate = df['stockout_flag'].mean()
+        
+        # 6. Backlog Rate (Overstock Rate)
+        # Calculate per-drug daily sales average
+        if 'drug_id' in df.columns:
+            drug_stats = df.groupby('drug_id')['sales'].mean()
+            df['avg_daily_sales'] = df['drug_id'].map(drug_stats)
+        else:
+            df['avg_daily_sales'] = df['sales'].mean()
+            
+        df['overstock_threshold'] = 90 * df['avg_daily_sales']
+        mask = df['avg_daily_sales'] == 0
+        if mask.any():
+             df.loc[mask, 'overstock_threshold'] = 0.001
+             
+        backlog_mask = df['inventory'] > df['overstock_threshold']
+        backlog_rate = backlog_mask.mean()
         
         return {
             'loss_rate': loss_rate,
