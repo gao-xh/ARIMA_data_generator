@@ -10,9 +10,9 @@ except:
 
 # --- Raw Data Paths ---
 DATA_LIB_DIR = BASE_DIR / "data lib"
-SALES_TEMPLATE = DATA_LIB_DIR / "销量库存业务表.xlsx"
-EXTERNAL_FACTORS_FILE = DATA_LIB_DIR / "外部影响因子表.xls"
-DRUG_INFO = DATA_LIB_DIR / "药品基础信息表.xls"
+SALES_TEMPLATE = DATA_LIB_DIR / "sales_inventory_template.csv"
+EXTERNAL_FACTORS_FILE = DATA_LIB_DIR / "external_factors.csv"
+DRUG_INFO = DATA_LIB_DIR / "drug_info.csv"
 
 # --- Output Paths ---
 PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"

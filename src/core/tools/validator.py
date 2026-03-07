@@ -24,26 +24,19 @@ class ThesisValidator:
         # Load targets from ThesisParams
         self.TARGETS = ThesisParams.BASELINE_TARGETS
 
-    def run_validation(self, test_drugs: List[Dict[str, Any]], external_data: pd.DataFrame) -> Dict[str, Any]:
+    def validate_dataset(self, full_df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Run a simulation on a subset of drugs to validate statistical alignment.
-        Validates both Baseline (pre-optimization) and Optimized (post-optimization) periods.
+        Validate an existing DataFrame (e.g. from file or generation) against stats.
+        Assumes DF has 'date' column.
         """
-        results = []
+        if 'date' not in full_df.columns:
+             # Try to parse or assume index?
+             return {'error': 'No date column'}
+             
+        full_df['date'] = pd.to_datetime(full_df['date'])
         
         # Determine Split Date
         split_date = pd.Timestamp(ThesisParams.SAMPLE_INFO['test_split_date'])
-        
-        for drug in test_drugs:
-            # Run simulation
-            sim = MCMC_Transition(self.config, drug, external_data)
-            # Ensure we cover enough time for both periods
-            # Config default starts 2024-01-01. Split is 2024-09-01.
-            # We run 365 days (2024)
-            df = sim.run_simulation(duration_days=365) 
-            results.append(df)
-            
-        full_df = pd.concat(results, ignore_index=True)
         
         # Split Data
         baseline_df = full_df[full_df['date'] < split_date]
@@ -58,7 +51,7 @@ class ThesisValidator:
         optimized_compliance = self._check_compliance(optimized_metrics, ThesisParams.OPTIMIZATION_TARGETS)
         
         return {
-            'overall_status': 'PASS' if (all(baseline_compliance.values()) and all(optimized_compliance.values())) else 'FAIL',
+            'overall_status': 'PASS' if (baseline_compliance['passed'] and optimized_compliance['passed']) else 'WARN',
             'baseline': {
                 'metrics': baseline_metrics,
                 'compliance': baseline_compliance,
@@ -71,6 +64,25 @@ class ThesisValidator:
             }
         }
 
+    def run_validation(self, test_drugs: List[Dict[str, Any]], external_data: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Run a NEW simulation on a subset of drugs to validate statistical alignment.
+        Validates both Baseline (pre-optimization) and Optimized (post-optimization) periods.
+        """
+        results = []
+        
+        for drug in test_drugs:
+            # Run simulation
+            sim = MCMC_Transition(self.config, drug, external_data)
+            # Ensure we cover enough time for both periods
+            # Config default starts 2024-01-01. Split is 2024-09-01.
+            # We run 365 days (2024)
+            df = sim.run_simulation(duration_days=365) 
+            results.append(df)
+            
+        full_df = pd.concat(results, ignore_index=True)
+        return self.validate_dataset(full_df)
+
     def _calculate_metrics(self, df: pd.DataFrame) -> Dict[str, float]:
         if df.empty:
             return {
@@ -78,53 +90,39 @@ class ThesisValidator:
                 'backlog_rate': 0.0, 'funds_occupied': 0.0
             }
             
-        total_demand = df['demand'].sum()
         total_loss = df['loss'].sum()
         total_sales = df['sales'].sum()
         avg_inventory = df['inventory'].mean()
-        
-        # Loss Rate (Defined as Loss / (Sales + Loss) or Loss/TotalInflow)
-        # Using Loss / (Sales + Loss) as robust metric
-        loss_rate = total_loss / (total_sales + total_loss) if (total_sales + total_loss) > 0 else 0
-        
-        # Stockout Rate
-        stockout_days = df['stockout_flag'].sum()
         total_days = len(df['date'].unique()) # Correct day count
-        stockout_rate = stockout_days / (total_days * len(df['drug_id'].unique())) # Per Drug-Day
-        # Actually standard definition is: Prob of Stockout on a day.
-        # If df contains multiple drugs, we average over all rows?
-        # df contains rows for drug * days. So len(df) is total drug-days.
+        
+        # Funds Occupied: Avg Inventory * Price
+        if 'unit_price' in df.columns:
+            funds_occupied = (df['inventory'] * df['unit_price']).mean()
+        else:
+            funds_occupied = avg_inventory * 35.0  # Fallback
+
+        # Loss Rate: Loss / (Sales + Loss)
+        throughput = total_sales + total_loss
+        loss_rate = total_loss / throughput if throughput > 0 else 0
+        
+        # Stockout Rate: Days with stockout / Total Drug-Days
+        stockout_days = df['stockout_flag'].sum()
         stockout_rate = stockout_days / len(df) if len(df) > 0 else 0
         
-        # Turnover Days
-        # Turnover Ratio = Annualized COGS / Average Inventory
-        # We have partial data. 
-        # Daily Turnover = Sales / Avg Inv
-        # Turnover Days = 1 / Daily Turnover ? No.
-        # Turnover Ratio (for period) = Total Sales / Avg Inv.
-        # Turnover Days = Period Days / Turnover Ratio = Period Days * Avg Inv / Total Sales
-        turnover_days = (total_days * avg_inventory) / total_sales if total_sales > 0 else 0
+        # Turnover Days: 365 * Avg Inventory / Total Annualized Sales
+        # Daily Sales Rate
+        sales_per_day = total_sales / total_days if total_days > 0 else 0
+        turnover_days = avg_inventory / sales_per_day if sales_per_day > 0 else 0
         
-        # Backlog Rate (Not explicitly tracked in basic sim, assuming stockout ~ backlog risk)
-        # Or define as Stockout Rate * Factor
-        backlog_rate = stockout_rate * 5 # Approximation or placeholder
-        
-        # Funds Occupied (Avg Inv * Unit Cost). 
-        # Since we don't have Unit Cost in DF, we can't compute total value easily unless we assume avg cost.
-        # Thesis Target is 28.5 Wan (285,000).
-        # We calculate "Average Inventory Units" here. Need cost.
-        # Check if 'run_simulation' stored drug info in DF? No.
-        # But validator is initialized with Drug Info? No, run_validation takes drug_info.
-        # Actually this calculates metrics for the DF generated from ONE drug or MANY?
-        # If many, need sum(Inv * Price).
-        
-        # Simplified: Use a default price if not available to make the unit scale meaningful
-        # Thesis Avg Price ~ 30-40 RMB?
-        # If Funds=285,000 and turnover ~45 days. Sales=Funds*(365/45) ~ 2.3M
-        # Let's assume average unit price = 35 RMB
-        avg_price = 35.0
-        
-        funds_occupied = avg_inventory * avg_price
+        # Backlog Rate (Overstock Rate): Ratio of Days with > 90 Days Supply
+        overstock_threshold = 90 * sales_per_day
+        # If sales per day is 0, everything is overstock if inventory > 0
+        if sales_per_day == 0:
+            overstock_days = len(df[df['inventory'] > 0])
+        else:
+            overstock_days = len(df[df['inventory'] > overstock_threshold])
+            
+        backlog_rate = overstock_days / len(df) if len(df) > 0 else 0
         
         return {
             'loss_rate': loss_rate,
@@ -133,6 +131,60 @@ class ThesisValidator:
             'backlog_rate': backlog_rate,
             'funds_occupied': funds_occupied
         }
+
+    def generate_markdown_report(self, validation_result: Dict[str, Any]) -> str:
+        """
+        Generates a Markdown report comparing Generated Stats vs Thesis Targets.
+        """
+        baseline = validation_result['baseline']
+        optimized = validation_result['optimized']
+        
+        lines = []
+        lines.append("# Statistical Validation Report (生成数据统计验证报告)\n")
+        
+        def add_section(title, data, target_period):
+            lines.append(f"## {title} Period ({target_period})")
+            lines.append("| Metric (指标) | Generated (生成值) | Thesis Target (论文目标) | Deviation (偏差) | Status |")
+            lines.append("| :--- | :--- | :--- | :--- | :--- |")
+            
+            # Helper for row
+            metrics = data['metrics']
+            targets = data['targets']
+            
+            row_map = {
+                'loss_rate': ('Loss Rate (损耗率)', True, 1.0),
+                'stockout_rate': ('Stockout Rate (缺货率)', True, 1.0),
+                'backlog_rate': ('Backlog Rate (积压率)', True, 1.0),
+                'turnover_days': ('Turnover Days (周转天数)', False, 1.0),
+                'funds_occupied': ('Funds Occupied (资金占用)', False, 1.0/10000) # Show in Wan
+            }
+            
+            for key, (label, is_pct, mult) in row_map.items():
+                actual = metrics.get(key, 0.0)
+                target = targets.get(key, 0.0)
+                diff = actual - target
+                
+                if is_pct:
+                    s_act = f"{actual*100:.1f}%"
+                    s_tgt = f"{target*100:.1f}%"
+                    s_dif = f"{diff*100:+.1f}%"
+                else:
+                    s_act = f"{actual*mult:.1f}"
+                    s_tgt = f"{target*mult:.1f}"
+                    s_dif = f"{diff*mult:+.1f}"
+                    if key == 'funds_occupied': s_act += " Wan"
+                
+                # Simple Pass/Fail logic (e.g. within 20% relative error or absolute diff)
+                # For demonstration, we just mark it.
+                status = "✅" if abs(diff) < (target * 0.2 if target else 0.1) else "⚠️"
+                
+                lines.append(f"| {label} | {s_act} | {s_tgt} | {s_dif} | {status} |")
+            lines.append("")
+
+        add_section("1. Baseline (经验模式)", baseline, "2023.01 - 2024.08")
+        add_section("2. Optimized (优化后)", optimized, "2024.09 - 2024.12")
+        
+        return "\n".join(lines)
 
     def _check_compliance(self, metrics: Dict[str, float], targets: Dict[str, float]) -> Dict[str, Any]:
         """

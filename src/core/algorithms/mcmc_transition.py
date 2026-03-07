@@ -38,29 +38,45 @@ class MCMC_Transition:
 
     def _determine_volatility(self, drug_info: Dict[str, Any]) -> str:
         """
-        Determine volatility category based on Drug Name Hash to ensure Thesis Distribution:
-        Total 128 SKUs -> Uses ThesisParams definitions.
-        We use a stable hash to assign categories consistently.
+        Determine volatility category based on Drug Name/Category Keywords first,
+        then fallback to Hash for unknown items to maintain some distribution.
+        
+        Ref: Thesis Section 1.1 (Background) & 1.3 (Design)
+        - Chronic/Stable -> LOW
+        - Common/Daily -> MEDIUM
+        - Flu/Seasonal/Antibiotics -> HIGH
         """
-        import hashlib
         
         drug_name = str(drug_info.get('药品名称', 'Unknown'))
+        category = str(drug_info.get('药品品类', 'Unknown'))
+        combined_text = (drug_name + " " + category).lower()
+        
+        # 1. High Volatility Rules (Seasonality/Epidemic driven)
+        high_keywords = ['感冒', '流感', '发热', '退烧', '止咳', '抗病毒', '抗生素', '消炎', '呼吸']
+        if any(k in combined_text for k in high_keywords):
+            return 'HIGH'
+            
+        # 2. Low Volatility Rules (Chronic/Long-term maintenance)
+        low_keywords = ['高血压', '糖尿病', '心脑', '维生素', '钙片', '慢病', '降压', '降糖', '营养']
+        if any(k in combined_text for k in low_keywords):
+            return 'LOW'
+
+        # 3. Fallback: Hash-based distribution for "Others"
+        # Used to randomly distribute the remaining ambiguous drugs
+        import hashlib
+        
         # Use MD5 for stable hashing across runs
         hash_obj = hashlib.md5(drug_name.encode())
         hash_int = int(hash_obj.hexdigest(), 16)
         
-        # Total SKUs
-        total = ThesisParams.TOTAL_SKUS
-        h_val = hash_int % total
+        # Remainder Distribution (approximate)
+        # Assuming explicit rules cover the extremes, let the rest fall mostly into MEDIUM
+        # with some spillover to balance.
         
-        # Thresholds
-        low_count = ThesisParams.VOLATILITY_COUNTS['LOW']
-        med_count = ThesisParams.VOLATILITY_COUNTS['MEDIUM']
-        # high_count = ThesisParams.VOLATILITY_COUNTS['HIGH']
-        
-        if h_val < low_count:
+        val = hash_int % 100
+        if val < 20:
             return 'LOW'
-        elif h_val < (low_count + med_count):
+        elif val < 80:
             return 'MEDIUM'
         else:
             return 'HIGH'
@@ -228,7 +244,8 @@ class MCMC_Transition:
                 'loss': expired_today,
                 'stockout_flag': 1 if is_stockout else 0,
                 'order_qty': qty_ordered,
-                'volatility': self.volatility_cat
+                'volatility': self.volatility_cat,
+                'unit_price': float(self.drug_info.get('单价', 35.0))
             })
             
         return pd.DataFrame(records)

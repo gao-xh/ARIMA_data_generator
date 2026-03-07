@@ -24,7 +24,20 @@ class SimulationTuner:
         progress_callback: Optional callable(dict) to report detailed status to UI.
         """
         self.base_config = config
-        self.drug_info = drug_info
+        
+        # Ensure compatibility with drug_info csv columns
+        # Map input keys to internal keys if needed
+        self.drug_info = {
+            '药品ID': drug_info.get('药品ID', 'UNKNOWN'),
+            '药品名称': drug_info.get('药品名称', 'Unknown'),
+            # Validity in CSV is MONTHS usually, converted to DAYS in UI loading
+            '有效期': drug_info.get('有效期', 365),
+            '单价': drug_info.get('单价', 35.0)
+        }
+        
+        # Initialize Tuner validity from Drug Info
+        config.validity_days = int(self.drug_info['有效期'])
+        
         self.external_data = external_data
         self.validator = ThesisValidator(config)
         self.progress_callback = progress_callback
@@ -155,6 +168,9 @@ class SimulationTuner:
         Check if the generated segment trends towards the targets.
         Returns: (Error Score, Directional Feedback)
         """
+        if df.empty:
+            return 0.0, {}
+            
         # Determine Regime (Baseline vs Optimized)
         split_date = pd.Timestamp(ThesisParams.SAMPLE_INFO['test_split_date'])
         # Check median date of segment
@@ -163,61 +179,114 @@ class SimulationTuner:
         
         targets = ThesisParams.BASELINE_TARGETS if is_baseline else ThesisParams.OPTIMIZATION_TARGETS
         
-        # Calculate Local Metrics (Simple proxies)
-        # Loss Rate: Loss / Sales (Sensitive to short term noise)
+        # Calculate Local Metrics (Aligned with ThesisValidator)
         total_loss = df['loss'].sum()
-        total_sales = df['sales'].sum() + 0.1
-        loss_rate = total_loss / (total_sales + total_loss)
+        total_sales = df['sales'].sum()
+        avg_inventory = df['inventory'].mean()
+        total_days = len(df)
         
-        # Stockout Rate
+        # 1. Loss Rate
+        throughput = total_sales + total_loss
+        loss_rate = total_loss / throughput if throughput > 0 else 0
+        
+        # 2. Stockout Rate
         stockout_days = df['stockout_flag'].sum()
-        stockout_rate = stockout_days / len(df)
+        stockout_rate = stockout_days / total_days if total_days > 0 else 0
         
-        # Compare
-        loss_err = (loss_rate - targets['loss_rate'])
-        stock_err = (stockout_rate - targets['stockout_rate'])
+        # 3. Turnover Days (Annualized)
+        sales_per_day = total_sales / total_days if total_days > 0 else 0
+        turnover_days = avg_inventory / sales_per_day if sales_per_day > 0 else 0
         
-        total_error = abs(loss_err) + abs(stock_err) # L1 Norm
+        # 4. Backlog Rate (Overstock Rate)
+        # Using 90 days threshold as per Validator
+        overstock_threshold = 90 * sales_per_day
+        if sales_per_day == 0:
+             overstock_days = len(df[df['inventory'] > 0])
+        else:
+             overstock_days = len(df[df['inventory'] > overstock_threshold])
+        backlog_rate = overstock_days / total_days if total_days > 0 else 0
         
+        # Calculate Error and Feedback
+        # Weights: Loss=3, Stockout=5 (Critical), Backlog=1, Turnover=1
+        
+        errors = {}
         feedback = {}
-        if loss_err < -0.05: feedback['loss'] = 'too_low'
-        elif loss_err > 0.05: feedback['loss'] = 'too_high'
+        total_error = 0.0
         
-        if stock_err < -0.01: feedback['stockout'] = 'too_low'
-        elif stock_err > 0.01: feedback['stockout'] = 'too_high'
+        # Define tolerances and check each
+        checks = {
+            'loss_rate': (loss_rate, 0.05, 3.0),
+            'stockout_rate': (stockout_rate, 0.01, 5.0),
+            'backlog_rate': (backlog_rate, 0.05, 1.0),
+            'turnover_days': (turnover_days, 5.0, 1.0)
+        }
         
+        for key, (actual, tolerance, weight) in checks.items():
+            if key not in targets: continue
+            
+            target = targets[key]
+            diff = actual - target
+            
+            # Add to total error (normalized by target magnitude for scale)
+            # Avoid div by zero
+            denom = target if target != 0 else 1.0
+            norm_diff = abs(diff) / denom
+            
+            # Special case for Days (absolute diff is better than relative sometimes)
+            if key == 'turnover_days':
+                 norm_diff = abs(diff) / 10.0 # scale by 10 days
+                 
+            total_error += norm_diff * weight
+            
+            # Directional Feedback
+            if diff < -tolerance:
+                feedback[key] = 'too_low'
+            elif diff > tolerance:
+                feedback[key] = 'too_high'
+                
         return total_error, feedback
 
     def _adjust_params(self, feedback: Dict[str, str]):
         """
         Stochastic Gradient Descent on Simulation Parameters.
+        Adjusts params based on directional feedback from multifaceted evaluation.
         """
-        # Gradient Rules
-        # Loss Too Low -> Increase Inventory (Safety Factor) OR Decrease Validity
+        # 1. Loss Rate Control
+        # Loss Too Low -> Increase Inventory (Safety Factor) OR Decrease Validity (Simulate worse management)
         # Loss Too High -> Decrease Inventory OR Increase Validity
-        
-        if feedback.get('loss') == 'too_low':
-            self.current_params['safety_factor'] *= (1 + self.LEARNING_RATE)
+        if feedback.get('loss_rate') == 'too_low':
+            self.current_params['safety_factor'] *= (1 + self.LEARNING_RATE * 0.5)
+            # Decrease validity to simulate older stock or bad rotation
             self.current_params['validity_days'] = int(self.current_params['validity_days'] * (1 - self.LEARNING_RATE))
-        elif feedback.get('loss') == 'too_high':
-            self.current_params['safety_factor'] *= (1 - self.LEARNING_RATE)
+        elif feedback.get('loss_rate') == 'too_high':
+            self.current_params['safety_factor'] *= (1 - self.LEARNING_RATE * 0.5)
             self.current_params['validity_days'] = int(self.current_params['validity_days'] * (1 + self.LEARNING_RATE))
             
+        # 2. Stockout Rate Control (Priority)
         # Stockout Too Low -> Decrease Safety Factor OR Increase Demand Volatility (Flu)
         # Stockout Too High -> Increase Safety Factor OR Decrease Demand Volatility
-        
-        if feedback.get('stockout') == 'too_low':
+        if feedback.get('stockout_rate') == 'too_low':
              # Need more volatility to cause stockouts
              self.current_params['flu_sens'] *= (1 + self.LEARNING_RATE)
              # And maybe LESS inventory
              self.current_params['safety_factor'] *= (1 - self.LEARNING_RATE * 0.5)
-        elif feedback.get('stockout') == 'too_high':
+        elif feedback.get('stockout_rate') == 'too_high':
              self.current_params['flu_sens'] *= (1 - self.LEARNING_RATE)
-             self.current_params['safety_factor'] *= (1 + self.LEARNING_RATE * 0.5)
+             self.current_params['safety_factor'] *= (1 + self.LEARNING_RATE * 0.8)
+
+        # 3. Efficiency Metrics (Turnover & Backlog)
+        # Both suggest LOWER inventory if "too_high"
+        if feedback.get('turnover_days') == 'too_high' or feedback.get('backlog_rate') == 'too_high':
+             # Inventory is too bloated
+             self.current_params['safety_factor'] *= (1 - self.LEARNING_RATE * 0.5)
+        elif feedback.get('turnover_days') == 'too_low':
+             # Inventory is too lean
+             self.current_params['safety_factor'] *= (1 + self.LEARNING_RATE * 0.3)
 
         # Bounds Check
         self.current_params['safety_factor'] = max(0.5, min(4.0, self.current_params['safety_factor']))
         self.current_params['validity_days'] = max(30, min(720, self.current_params['validity_days']))
+        self.current_params['flu_sens'] = max(0.0, min(3.0, self.current_params['flu_sens']))
 
     def _apply_params(self, sim: MCMC_Transition):
         """

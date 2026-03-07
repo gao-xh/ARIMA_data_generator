@@ -119,24 +119,48 @@ class GenerationWidget(QWidget):
         self.btn_load_meta.clicked.connect(self.load_mock_drug)
 
     def load_mock_drug(self):
-        # In real app, load from CSV/DB defined in config
+        # In real app, load from CSV defined in config
         from src.config import DRUG_INFO
         import pandas as pd
         
         try:
-            # Try loading real Excel if exists
-            df = pd.read_excel(DRUG_INFO)
-            # Pick a random drug or specific one
+            # Load CSV (drug_info.csv)
+            # Encoding might be GBK or UTF-8. Try UTF-8 first, fallback to gb18030
+            try:
+                df = pd.read_csv(DRUG_INFO, encoding='utf-8')
+            except UnicodeDecodeError:
+                df = pd.read_csv(DRUG_INFO, encoding='gb18030')
+                
+            # Available Columns based on file preview:
+            # 药品编号, 药品名称, 含量规格, 零售单位, 效期（月）, 药品剂型, 零售价, 药品品类, 波动区间分类
+            
+            # Map to internal keys
+            # Pick the FIRST row for demo, or handle selection in a real list
             row = df.iloc[0]
-            self.current_drug = row.to_dict()
-            self.log(f"Loaded real drug: {self.current_drug.get('药品名称', 'Unknown')}")
+            
+            validity_months = row.get('效期（月）', 12)
+            try:
+                validity_days = int(validity_months) * 30
+            except:
+                validity_days = 365
+                
+            self.current_drug = {
+                '药品ID': str(row.get('药品编号', 'UNKNOWN')),
+                '药品名称': str(row.get('药品名称', 'Unknown Drug')),
+                '有效期': validity_days,
+                '单价': float(row.get('零售价', 35.0)),
+                '波动分类': str(row.get('波动区间分类', '中波动'))
+            }
+            self.log(f"Loaded real drug: {self.current_drug['药品名称']} (ID: {self.current_drug['药品ID']})")
+            self.log(f"  Price: {self.current_drug['单价']}, Validity: {self.current_drug['有效期']} days")
+            
         except Exception as e:
-            self.log(f"Metadata file not found or error ({str(e)}), using mock.")
+            self.log(f"Metadata file error ({str(e)}), using mock.")
             self.current_drug = {
                 '药品ID': 'DRUG_001',
                 '药品名称': 'Test Antibiotic',
                 '有效期': 365,
-                '单价': 25.0  # Added Price for Funds Occupied calculation
+                '单价': 25.0 
             }
         
         self.lbl_drug_status.setText(f"Selected: {self.current_drug.get('药品名称', 'Unknown')}")

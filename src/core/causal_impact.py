@@ -15,17 +15,30 @@ class CausalImpact:
         Thesis Conclusion: Seasonal patterns exist.
         Simple model:
         - Respiratory/Cold: High in Win/Spr (12, 1, 2, 3), Low in Summer.
-        - Gastrointestinal: High in Summer (6, 7, 8). (Not implemented yet explicitly, treated as base)
-        - Chronic: Stable.
+        - Gastrointestinal: High in Summer (6, 7, 8).
+        - Chronic: Mild Winter effect (Cardio etc sensitive to cold).
         """
-        # "RESPIRATORY" is the internal flag set in DrugState
-        is_resp = drug_category == 'RESPIRATORY' or drug_category in ['呼吸系统用药', '感冒用药', '解热镇痛用药']
+        # Standardize Category Checks
+        cat_upper = drug_category.upper()
+        # Include localized terms from CSV
+        is_resp = 'RESPIRATORY' in cat_upper or any(x in cat_upper for x in ['呼吸', '感冒', '解热', '抗生物', '抗生素'])
+        is_chronic = 'CHRONIC' in cat_upper or any(x in cat_upper for x in ['慢病', '心脑', '高血压', '心血管', '糖尿病'])
+        is_gastro = 'GASTRO' in cat_upper or any(x in cat_upper for x in ['消化', '胃', '腹'])
         
         if is_resp:
-            # Winter Peak
+            # Strong Winter/Spring Peak
             if month in [12, 1, 2]: return base_demand * 1.3
             if month in [3, 4, 11]: return base_demand * 1.1
             if month in [6, 7, 8]: return base_demand * 0.7
+            
+        elif is_chronic:
+            # Mild Winter Peak (Cardiovascular constricts in cold)
+            if month in [12, 1, 2]: return base_demand * 1.15
+            if month in [3, 11]: return base_demand * 1.05
+            
+        elif is_gastro:
+            # Summer Peak (Food spoilage)
+            if month in [6, 7, 8]: return base_demand * 1.25
             
         return base_demand
 
@@ -48,10 +61,14 @@ class CausalImpact:
         # Thesis Assumption: Cold threshold around 10C or 5C depending on region
         TEMP_THRESHOLD_COLD = 10.0
         
-        is_sensitive = drug_category == 'RESPIRATORY' or drug_category in ['呼吸系统用药', '心脑血管用药', '感冒用药']
+        cat_upper = drug_category.upper()
+        # Standardize matching
+        is_resp = 'RESPIRATORY' in cat_upper or any(x in cat_upper for x in ['呼吸', '感冒', '解热'])
+        # Chronic (Cardio) is sensitive to cold -> blood pressure issues
+        is_chronic = 'CHRONIC' in cat_upper or any(x in cat_upper for x in ['心脑', '高血压', '心血管'])
         
         # Only specific categories react
-        if not is_sensitive:
+        if not (is_resp or is_chronic):
             return base_demand
 
         if temperature < TEMP_THRESHOLD_COLD:
