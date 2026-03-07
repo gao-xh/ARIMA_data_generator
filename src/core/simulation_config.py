@@ -24,8 +24,9 @@ class SimulationConfig:
     
     # 4. External Sensitivity (Thesis Conclusion 1: External factors matter)
     # These coefficients control how much Temp/Flu modifies base demand.
-    temp_sensitivity: float = 1.2   # Cold weather impact multiplier
-    flu_sensitivity: float = 2.5    # Flu outbreak impact multiplier (Increased to force stockouts)
+    temp_sensitivity: float = 1.0   # Cold weather impact multiplier
+    flu_sensitivity: float = 1.2    # Flu outbreak impact multiplier (Reduced from 2.5 to avoid crazy stockouts)
+    rain_sensitivity: float = 0.0   # Rainfall impact multiplier
     
     # 7. Inventory Strategy
     # Thesis Baseline: "Empirical Mode" (2023-2024)
@@ -41,6 +42,7 @@ class SimulationConfig:
     #   Avg Stock = 60 - 15 = 45 days. -> MATCHES 44.6 Days.
     replenishment_days: int = 30      # R=30 (Monthly)
     safety_stock_factor: float = 2.0  # High factor causes High Inventory (44.6 days) & Loss (17.2%)
+    initial_stock_days: int = 14      # Initial inventory in days of supply
     validity_days: int = 180          # Shortened theoretical validity to trigger 17% loss
 
 
@@ -48,6 +50,10 @@ class SimulationConfig:
     # "Inventory update lag 2-3 days" -> Simulates Excel logging delay
     info_lag_days_min: int = 2
     info_lag_days_max: int = 3
+    
+    # 8. Active Clinic Profile (Scale Factor)
+    # 1.0 = Standard Community, 2.0 = High Volume, 0.5 = Village Station
+    active_clinic_scale: float = 1.0
     # "Delivery cycle uncertainty 3-5 days" -> Simulates vendor inefficiency
     lead_time_min: int = 3
     lead_time_max: int = 5

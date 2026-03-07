@@ -28,11 +28,11 @@ class SimulationTuner:
         self.drug_info = {
             '药品ID': drug_info.get('药品ID', 'UNKNOWN'),
             '药品名称': drug_info.get('药品名称', 'Unknown'),
+            '药品品类': drug_info.get('药品品类', 'Unknown'), # Preserve Category
+            '波动区间分类': drug_info.get('波动区间分类'), # Preserve Volatility logic from CSV
             # Validity in CSV is MONTHS usually, converted to DAYS in UI loading
             '有效期': drug_info.get('有效期', 365),
             '单价': drug_info.get('单价', 35.0),
-            # Flu Sensitivity embedded in Drug Info? Or Config?
-            # Config has global sensitivity.
         }
         
         # Initialize Tuner validity from Drug Info

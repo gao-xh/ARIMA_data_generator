@@ -46,6 +46,12 @@ class MCMC_Transition:
         - Common/Daily -> MEDIUM
         - Flu/Seasonal/Antibiotics -> HIGH
         """
+        # Prioritize explicit classification from CSV if available
+        if '波动区间分类' in drug_info and drug_info['波动区间分类']:
+            val = str(drug_info['波动区间分类']).upper()
+            if 'HIGH' in val or '高' in val: return 'HIGH'
+            if 'LOW' in val or '低' in val: return 'LOW'
+            if 'MEDIUM' in val or '中' in val: return 'MEDIUM'
         
         drug_name = str(drug_info.get('药品名称', 'Unknown'))
         category = str(drug_info.get('药品品类', 'Unknown'))
@@ -144,7 +150,7 @@ class MCMC_Transition:
             
             # 2. Operator A: Generate Demand
             # Scale clinic size (thesis factor)
-            clinic_scale = 1.0 # Placeholder for now
+            clinic_scale = getattr(self.config, 'active_clinic_scale', 1.0)
             daily_demand = self.demand_model.generate(date, ext_row, clinic_scale)
             
             # 3. Receive Incoming Orders (Pipeline -> On Hand)

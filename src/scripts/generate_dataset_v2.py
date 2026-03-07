@@ -84,17 +84,12 @@ def main():
     # - Period: 2023.01.01 - 2024.12.31 (24 Months)
     logger.info("Defining Thesis 'Non-Optimized' Baseline Environment (2023-2024)")
     
+    # 7 Clinics abstracted as one entity
     config = SimulationConfig(
         start_date=pd.Timestamp('2023-01-01'),
         end_date=pd.Timestamp('2024-12-31'), 
         clinics={
-            'Clinic_A': 1.0,   
-            'Clinic_B': 1.2,   
-            'Clinic_C': 0.8,   
-            'Clinic_D': 1.5,   
-            'Clinic_E': 0.5,   
-            'Clinic_F': 1.1,
-            'Clinic_G': 0.7
+            'Main_Clinic': 1.0,   
         },
         # Manual Mode Parameters (The constraints that cause the failure)
         replenishment_days=30,      # Thesis: "Monthly replenishment plan"

@@ -43,11 +43,17 @@ class DemandModel:
         self.temp_sens = params['temp_sens']
         self.flu_sens = params['flu_sens']
         self.season_sens = params['season_sens']
+        # Default to 0.0 if not yet added to all dicts in ThesisParams (though it should be)
+        self.rain_sens = params.get('rain_sens', 0.0)
 
     def generate(self, current_date: pd.Timestamp, external_factors: pd.Series, clinic_scale: float) -> float:
         """Calculate theoretical demand for the day."""
-        temp = external_factors.get('平均气温', 20.0)
+        temp = external_factors.get('平均气温2m(℃)', 20.0) # Updated column name from CSV
+        if pd.isna(temp): temp = external_factors.get('平均气温', 20.0)
+
         flu_rate = external_factors.get('ILI%', 0.0)
+        
+        rain = external_factors.get('平均降水量(mm)', 0.0)
         
         # Base Demand
         demand = self.raw_demand * clinic_scale
@@ -68,6 +74,10 @@ class DemandModel:
             eff_flu_sens = self.config.flu_sensitivity * self.flu_sens
             demand = CausalImpact.calculate_flu_impact(demand, flu_rate, self.functional_category, eff_flu_sens)
             
+        # Rainfall Impact (New H1 Variable)
+        if self.rain_sens > 0:
+            demand = CausalImpact.calculate_rainfall_impact(demand, rain, self.rain_sens)
+
         # Noise
         eff_sigma = self.config.random_noise_sigma * self.noise_mult
         demand = CausalImpact.apply_random_noise(demand, eff_sigma)

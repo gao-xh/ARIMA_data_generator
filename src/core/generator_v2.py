@@ -27,7 +27,20 @@ class DrugState:
         
         # 2. Inventory Parameters
         # Thesis Conclusion: Manual safety stock is 14 days supply approx
-        self.inventory = int(self.base_demand * 14)
+        # User Feedback: Adjustable initial stock OR Reference from CSV
+        # If '初始库存' is available in drug_info (from scaled reference), use it as baseline.
+        csv_init_stock = drug_info.get('初始库存', None)
+        init_days = getattr(config, 'initial_stock_days', 14)
+        
+        # Randomize initial stock slightly (±20%) to avoid artificial synchronization
+        random_factor = random.uniform(0.8, 1.2)
+        
+        if csv_init_stock is not None and not pd.isna(csv_init_stock) and float(csv_init_stock) > 0:
+            # Use CSV value directly (with noise)
+            self.inventory = int(float(csv_init_stock) * random_factor)
+        else:
+            # Fallback to calculated days
+            self.inventory = int(self.base_demand * init_days * random_factor)
         
         # 3. Validity Tracking
         # Thesis Conclusion: Expired stock is "Loss"
@@ -73,6 +86,7 @@ class DrugState:
             self.temp_sens_factor = 0.0       
             self.flu_sens_factor = 0.0        
             self.season_sens_factor = 0.2     
+            self.rain_sens_factor = 0.0       # Insensitive
             
             # LOW Params for Target: Stockout < 1%, Loss < 10%
             self.validity_days = 720 # Very long, rarely expire
@@ -85,6 +99,7 @@ class DrugState:
             self.temp_sens_factor = 0.8       
             self.flu_sens_factor = 0.8
             self.season_sens_factor = 0.5
+            self.rain_sens_factor = 0.5       # Moderate
             
             # MEDIUM Params for Target: Stockout ~3%, Loss ~15%
             self.validity_days = 360 # Standard 1 year
@@ -97,6 +112,8 @@ class DrugState:
             self.temp_sens_factor = 1.5       
             self.flu_sens_factor = 2.0        # Hyper Sensitive
             self.season_sens_factor = 1.0
+            self.rain_sens_factor = 1.0       # High Sensitivity
+
             
             # HIGH Params for Target: Stockout ~8-10%, Loss ~30-40%
             # Thesis: "High volatility drugs often have short shelf life or Overstocking leads to expiry"
@@ -126,6 +143,7 @@ class DrugState:
         """
         temp = external_factors.get('平均气温', 20.0)
         flu_rate = external_factors.get('ILI%', 0.0)
+        rain = external_factors.get('平均降水量(mm)', 0.0)
         
         # 1. Base
         demand = self.base_demand
@@ -140,7 +158,7 @@ class DrugState:
              season_impact = (season_impact - 1.0) * self.season_sens_factor + 1.0
         demand *= season_impact
         
-        # Apply Temp/Flu - Gated by Volatility Category
+        # Apply Temp/Flu/Rain - Gated by Volatility Category
         # Only apply if factors > 0
         if self.temp_sens_factor > 0:
             # We scale the *config* sensitivity by our local factor
@@ -150,6 +168,11 @@ class DrugState:
         if self.flu_sens_factor > 0:
             effective_flu_sens = self.config.flu_sensitivity * self.flu_sens_factor
             demand = CausalImpact.calculate_flu_impact(demand, flu_rate, self.functional_category, effective_flu_sens)
+            
+        if self.rain_sens_factor > 0:
+            # Apply Rain Impact
+            effective_rain_sens = self.config.rain_sensitivity * self.rain_sens_factor
+            demand = CausalImpact.calculate_rainfall_impact(demand, rain, effective_rain_sens)
         
         # 3. Noise (蒙特卡洛模拟的随机性)
         # Apply specific noise multiplier from drug info
@@ -158,7 +181,9 @@ class DrugState:
         
         return demand
 
-    def _execute_control_policy(self, current_date: pd.Timestamp, current_inventory_position: float) -> int:
+
+    def _execute_control_policy(self, current_date: pd.Timestamp, perceived_inventory: float, 
+                                pending_orders_qty: float) -> int:
         """
         算子B: 控制策略 (The Control Policy - MANUAL / NAIVE)
         模拟人工补货逻辑: "经验式补货" (Empirical Ordering)
@@ -166,6 +191,31 @@ class DrugState:
         """
         replenish_order_qty = 0
         
+        # Calculate trailing 30-day average demand (Local knowledge)
+        avg_sales = sum(self.sales_history[-30:]) / 30.0 if self.sales_history else 0.1
+        
+        # Current Position = Hands-on Inventory + Incoming
+        current_position = perceived_inventory + pending_orders_qty
+
+        # --- 1. Emergency Replenishment (Daily Check) ---
+        # 模拟老板发现快断货时的紧急补货行为
+        # 触发条件: 物理库存不足 3 天销量 (Emergency Threshold)
+        emergency_threshold = avg_sales * 3 
+        
+        # Check PHYSICAL inventory (perceived) not Position, because Boss sees empty shelf
+        if perceived_inventory < emergency_threshold:
+            # Check if help is already on the way (Position > Threshold + Buffer)
+            # If Position is low too, then PANIC ORDER
+            if current_position < (avg_sales * 7): # Target 7 days safety
+                # Emergency Order to fill up to 14 days
+                target_emergency = avg_sales * 14
+                needed = target_emergency - current_position
+                if needed > 0:
+                     # 50% probability to actually trigger (Boss might be busy/ignorant)
+                     if random.random() < 0.5:
+                         return int(needed)
+
+        # --- 2. Periodic Review (Regular Replenishment) ---
         # 只有在特定的“盘点日”才触发控制信号
         day_of_year = current_date.dayofyear
         is_review_day = (day_of_year % self.config.replenishment_days == 0)
@@ -174,7 +224,6 @@ class DrugState:
             # Flaw 1: 仅依赖历史均值 (Naive Mean)
             # 论文痛点: "只依据经验无法精准捕捉波动规律"
             # 这种算法在趋势上升时会少订(导致缺货), 在趋势下降时会多订(导致积压)
-            avg_sales = sum(self.sales_history[-30:]) / 30.0 if self.sales_history else 0.1
             
             # Flaw 2: 静态安全库存系数 (Static Safety Stock)
             # 论文痛点: "缺乏针对性的效期预警...一刀切"
@@ -186,11 +235,14 @@ class DrugState:
             # If noise multiplier is high, hoard more.
             # But we already set manual_safety_factor high for HIGH vol.
             
+            # Boost Safety Factor slightly to reduce excessive stockouts as per user feedback
+            safety_factor *= 1.5 
+            
             target_stock = avg_sales * self.config.replenishment_days * safety_factor
             
             # R: Re-order point logic
-            if current_inventory_position < target_stock:
-                replenish_order_qty = int(target_stock - current_inventory_position)
+            if current_position < target_stock:
+                replenish_order_qty = int(target_stock - current_position)
                 replenish_order_qty = max(0, replenish_order_qty)
                 
         return replenish_order_qty
@@ -235,16 +287,18 @@ class DrugState:
         lag_days = random.randint(self.config.info_lag_days_min, self.config.info_lag_days_max)
         perceived_inventory = self.inventory_history[-lag_days] if len(self.inventory_history) > lag_days else inv_physical_remaining
         
-        # Adding in-transit orders (Assuming they know about pending orders correctly, or maybe lagged too? Let's assume they know orders placed)
-        inventory_position = perceived_inventory + sum(qty for _, qty in self.pending_orders)
+        pending_qty = sum(qty for _, qty in self.pending_orders)
         
         # 调用算子B
-        order_qty = self._execute_control_policy(current_date, inventory_position)
+        order_qty = self._execute_control_policy(current_date, perceived_inventory, pending_qty)
         
         if order_qty > 0:
-             # 随机提前期 (Lead Time Latency) - Thesis: 3-5 days uncertainty
-            lt_min, lt_max = self.config.lead_time_min, self.config.lead_time_max
-            lead_time = random.randint(lt_min, lt_max)
+             # Random Lead Time (3-5 days usually + noise)
+             # User Request: "Roughly 4 days floating"
+            base_lead = 4
+            noise = random.randint(-1, 2) # -1, 0, 1, 2 -> 3 to 6 days range
+            lead_time = max(1, base_lead + noise)
+            
             self.pending_orders.append((lead_time, order_qty))
 
         # --- 5. 计算损耗 (Calculate Loss L_t) ---
@@ -380,8 +434,8 @@ class GeneratorV2:
                         C.COL_INV_END: result[C.COL_INV_END],
                         C.COL_REPLENISH: result[C.COL_REPLENISH],
                         C.COL_STOCKOUT: result[C.COL_STOCKOUT],
-                        C.COL_LOSS: result[C.COL_LOSS],
-                        C.COL_CLINIC: clinic_name
+                        C.COL_LOSS: result[C.COL_LOSS]
+                        # Clinic info removed as requested
                     }
                     records.append(record)
                     

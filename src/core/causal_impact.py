@@ -126,6 +126,32 @@ class CausalImpact:
         return base_demand
 
     @staticmethod
+    def calculate_rainfall_impact(base_demand: float, rainfall_mm: float,
+                                sensitivity: float = 1.0) -> float:
+        """
+        Thesis Variable: Log-Normal Rainfall (R')
+        Formula: R' = ln(Rainfall + 1)
+        
+        Impact:
+        - High rainfall typically reduces patient visits (access barrier).
+        - However, for regression, it's just a factor X.
+        - Here we model it as a slight dampener on general visits unless sensitivity is tuned otherwise.
+        """
+        if rainfall_mm <= 0:
+            return base_demand
+            
+        # Log transformation as per thesis
+        log_rain = np.log1p(rainfall_mm)
+        
+        # Default behavior: Rain reduces visits slightly (-5% per log unit * sensitivity)
+        # 10mm rain -> log(11) ~= 2.4 -> 2.4 * 0.05 = 12% drop
+        # But for 'High Volatility' drugs in Thesis, it might be included because it correlates.
+        # We assume negative correlation for general patient traffic.
+        
+        factor = 1.0 - (0.05 * log_rain * sensitivity)
+        return max(0.0, base_demand * factor)
+
+    @staticmethod
     def apply_random_noise(demand: float, sigma: float) -> int:
         """
         Thesis Conclusion: Real-world demand has noise ('N +- x').
