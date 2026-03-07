@@ -8,9 +8,11 @@ from PySide6.QtWidgets import (
      QWidget, QVBoxLayout, QHBoxLayout, 
      QGroupBox, QPushButton, QLabel, 
      QTextEdit, QProgressBar, QComboBox, QDoubleSpinBox, QSpinBox,
-     QSplitter, QSizePolicy, QFormLayout
+     QSplitter, QSizePolicy, QFormLayout, QTabWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 
 # Matplotlib Integration
 try:
@@ -103,6 +105,42 @@ class GenerationWidget(QWidget):
         control_panel = QGroupBox("Configuration")
         control_layout = QVBoxLayout()
         
+        # 0. Study Context
+        context_group = QGroupBox("Research Object (Thesis Context)")
+        context_layout = QVBoxLayout()
+        
+        info_label = QLabel(
+            "<b>Managed Clinics:</b> 7 (2 Streets, 5 Urban Villages)<br>"
+            "<b>Service Population:</b> 83,000<br>"
+            "<b>Daily Visits:</b> 30-80 (Avg)<br>"
+            "<b>Included Drugs:</b> 128 SKUs"
+        )
+        info_label.setStyleSheet("color: #555; font-size: 11px;")
+        context_layout.addWidget(info_label)
+        
+        # Volatility Classification Legend
+        legend_layout = QFormLayout()
+        
+        lbl_low = QLabel("Low (CV < 0.2):")
+        lbl_low.setStyleSheet("color: green; font-weight: bold;")
+        self.val_low = QLabel("41 SKUs")
+        
+        lbl_med = QLabel("Medium (0.2 ≤ CV ≤ 0.5):")
+        lbl_med.setStyleSheet("color: orange; font-weight: bold;")
+        self.val_med = QLabel("63 SKUs")
+        
+        lbl_high = QLabel("High (CV > 0.5):")
+        lbl_high.setStyleSheet("color: red; font-weight: bold;")
+        self.val_high = QLabel("24 SKUs")
+        
+        legend_layout.addRow(lbl_low, self.val_low)
+        legend_layout.addRow(lbl_med, self.val_med)
+        legend_layout.addRow(lbl_high, self.val_high)
+        
+        context_layout.addLayout(legend_layout)
+        context_group.setLayout(context_layout)
+        control_layout.addWidget(context_group)
+
         # 1. Drug Selection
         control_layout.addWidget(QLabel("Select Drug:"))
         self.combo_drug = QComboBox()
@@ -175,16 +213,32 @@ class GenerationWidget(QWidget):
         control_panel.setFixedWidth(300)
         
         # --- Right Panel: Visualization ---
-        viz_panel = QGroupBox("Results Visualization")
+        viz_panel = QGroupBox("Results & Model Analysis")
         viz_layout = QVBoxLayout()
         
-        self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
+        self.viz_tabs = QTabWidget()
+        
+        # Tab 1: Inventory
+        self.tab_inv = QWidget()
+        inv_lay = QVBoxLayout()
+        self.canvas_inv = MplCanvas(self, width=5, height=4, dpi=100)
+        inv_lay.addWidget(self.canvas_inv)
+        self.tab_inv.setLayout(inv_lay)
+        self.viz_tabs.addTab(self.tab_inv, "📦 Inventory Dynamics")
+        
+        # Tab 2: ARIMA Fit
+        self.tab_model = QWidget()
+        mod_lay = QVBoxLayout()
+        self.canvas_mod = MplCanvas(self, width=5, height=4, dpi=100)
+        mod_lay.addWidget(self.canvas_mod)
+        self.tab_model.setLayout(mod_lay)
+        self.viz_tabs.addTab(self.tab_model, "📈 Demand Forecast Fit")
+        
+        viz_layout.addWidget(self.viz_tabs)
+        viz_layout.addWidget(QLabel("Simulation Log (ARIMA Diagnostics):"))
         self.log_console = QTextEdit()
         self.log_console.setReadOnly(True)
         self.log_console.setMaximumHeight(150)
-        
-        viz_layout.addWidget(self.canvas)
-        viz_layout.addWidget(QLabel("Simulation Log:"))
         viz_layout.addWidget(self.log_console)
         
         viz_panel.setLayout(viz_layout)
@@ -210,12 +264,35 @@ class GenerationWidget(QWidget):
                 
                 self.combo_drug.clear()
                 items = []
+                
+                # Thesis Logic for Classification
+                volatility_counts = {'LOW': 0, 'MEDIUM': 0, 'HIGH': 0}
+                
                 for idx, row in self.drug_df.iterrows():
                     name = str(row.get('药品名称', 'Unknown'))
                     cat = str(row.get('药品品类', 'Misc'))
-                    items.append(f"{name} ({cat})")
+                    # Calculate or Infer Volatility
+                    cv = float(row.get('波动系数', 0.35))
+                    
+                    if cv < 0.2:
+                        vol_cat = 'Low'
+                        volatility_counts['LOW'] += 1
+                    elif cv > 0.5:
+                        vol_cat = 'High'
+                        volatility_counts['HIGH'] += 1
+                    else:
+                        vol_cat = 'Medium'
+                        volatility_counts['MEDIUM'] += 1
+                        
+                    items.append(f"{name} ({vol_cat} CV={cv:.2f})")
+                
                 self.combo_drug.addItems(items)
                 self.log(f"Loaded {len(items)} drugs from metadata.")
+                
+                # Update UI
+                self.val_low.setText(f"{volatility_counts['LOW']} SKUs")
+                self.val_med.setText(f"{volatility_counts['MEDIUM']} SKUs")
+                self.val_high.setText(f"{volatility_counts['HIGH']} SKUs")
                 
                 # Trigger selection change to update params
                 self._on_drug_selected(0)
@@ -273,32 +350,42 @@ class GenerationWidget(QWidget):
     def on_simulation_finished(self, df: pd.DataFrame):
         self.btn_run.setEnabled(True)
         self.log(f"Simulation completed. Generated {len(df)} records.")
-        self.plot_results(df)
+        self.plot_inventory(df)
+        self.analyze_model_fit(df)
 
     def on_simulation_error(self, msg):
         self.btn_run.setEnabled(True)
         self.log(f"Error: {msg}")
 
-    def plot_results(self, df: pd.DataFrame):
-        self.canvas.axes.clear()
+    def plot_inventory(self, df: pd.DataFrame):
+        self.canvas_inv.axes.clear()
         
         # Scenario Split
-        # Fallback if scenario column missing (legacy run)
         if 'scenario' not in df.columns:
             df['scenario'] = 'Optimized' 
             
         df_base = df[df['scenario'] == 'Baseline']
         df_opt = df[df['scenario'] == 'Optimized']
         
-        # Use date checks for plotting
+        # Plot Baseline
         if not df_base.empty:
             x_base = df_base['date'] if 'date' in df_base.columns else range(len(df_base))
-            self.canvas.axes.plot(x_base, df_base['inventory'], color='#808080', linestyle='--', alpha=0.7, label='Baseline (Manual)')
+            self.canvas_inv.axes.plot(x_base, df_base['inventory'], color='#808080', linestyle='--', alpha=0.7, label='Baseline (Manual)')
             
             # Add Baseline Stockouts
             base_out = df_base[df_base['stockout_flag'] > 0]
             if not base_out.empty:
-                self.canvas.axes.scatter(base_out['date'], [-2]*len(base_out), color='black', marker='o', s=15, label='Baseline Stockout')
+                self.canvas_inv.axes.scatter(base_out['date'], [-2]*len(base_out), color='black', marker='o', s=15, label='Baseline Stockout')
+
+        # Plot Optimized
+        if not df_opt.empty:
+            x_opt = df_opt['date'] if 'date' in df_opt.columns else range(len(df_opt))
+            self.canvas_inv.axes.plot(x_opt, df_opt['inventory'], color='#28a745', linewidth=2, label='Optimized (ARIMA)')
+            
+            # Add Optimized Stockouts
+            opt_out = df_opt[df_opt['stockout_flag'] > 0]
+            if not opt_out.empty:
+                self.canvas_inv.axes.scatter(opt_out['date'], [0]*len(opt_out), color='red', marker='x', s=50, label='Optimized Stockout')
 
         # KPI Report
         self.log("\n=== 📊 Simulation Report ===")
@@ -308,7 +395,7 @@ class GenerationWidget(QWidget):
             avg_inv = sub_df['inventory'].mean()
             stockout_days = sub_df['stockout_flag'].sum()
             total_sales = sub_df['sales'].sum()
-            total_days = (sub_df['date'].max() - sub_df['date'].min()).days + 1
+            total_days = max(1, (sub_df['date'].max() - sub_df['date'].min()).days + 1)
             
             turnover = (avg_inv / (total_sales / total_days)) if total_sales > 0 else 0
             service_level = 1.0 - (stockout_days / total_days)
@@ -318,12 +405,60 @@ class GenerationWidget(QWidget):
             self.log(f"   • Turnover Days: {turnover:.1f} days")
             self.log(f"   • Service Level: {service_level*100:.1f}% ({stockout_days} stockouts)")
 
-        self.canvas.axes.set_title("Strategy Comparison: Empirical vs ARIMA-Optimized")
-        self.canvas.axes.set_xlabel("Date")
-        self.canvas.axes.set_ylabel("Inventory Level")
-        self.canvas.axes.legend()
-        self.canvas.axes.grid(True, alpha=0.3)
+        self.canvas_inv.axes.set_title("Strategy Comparison: Empirical vs ARIMA-Optimized")
+        self.canvas_inv.axes.set_xlabel("Date")
+        self.canvas_inv.axes.set_ylabel("Inventory Level")
+        self.canvas_inv.axes.legend()
+        self.canvas_inv.axes.grid(True, alpha=0.3)
+        self.canvas_inv.fig.autofmt_xdate()
+        self.canvas_inv.draw()
+
+    def analyze_model_fit(self, df: pd.DataFrame):
+        """
+        Run ARIMA on the simulated 'Demand' data to visualize fit quality.
+        This validates that the demand pattern is indeed predictable by ARIMA.
+        """
+        self.canvas_mod.axes.clear()
         
-        # Rotate dates
-        self.canvas.fig.autofmt_xdate()
-        self.canvas.draw()
+        # 1. Extract Time Series (Use Baseline Demand as Ground Truth)
+        df_base = df[df['scenario'] == 'Baseline'].copy()
+        if df_base.empty: df_base = df.copy()
+            
+        if 'date' not in df_base.columns or 'demand' not in df_base.columns:
+            return
+
+        ts = df_base.set_index('date')['demand'].asfreq('D').fillna(0)
+        
+        # 2. Fit ARIMA Model
+        try:
+            order = (5, 1, 0) # Weekly AR logic
+            model = ARIMA(ts, order=order)
+            res = model.fit()
+            
+            fitted = res.fittedvalues
+            
+            # 4. Plot
+            self.canvas_mod.axes.plot(ts.index, ts, label='Actual Demand', color='#1f77b4', alpha=0.5)
+            self.canvas_mod.axes.plot(fitted.index, fitted, label=f'ARIMA{order} Fit', color='#ff7f0e', linestyle='--')
+            
+            # 5. Metrics
+            aic = res.aic
+            bic = res.bic
+            mse = mean_squared_error(ts, fitted)
+            rmse = np.sqrt(mse)
+            mape = mean_absolute_percentage_error(ts[ts>0], fitted[ts>0])
+            
+            self.log(f"\n=== 📉 Model Fit Diagnostics ===")
+            self.log(f"   • Model Order: ARIMA{order}")
+            self.log(f"   • AIC: {aic:.2f} | BIC: {bic:.2f}")
+            self.log(f"   • RMSE: {rmse:.4f}")
+            self.log(f"   • MAPE: {mape:.2%}")
+            
+            self.canvas_mod.axes.set_title(f"ARIMA Model Fit (RMSE={rmse:.2f}, MAPE={mape:.1%})")
+            self.canvas_mod.axes.legend()
+            self.canvas_mod.axes.grid(True, alpha=0.3)
+            self.canvas_mod.fig.autofmt_xdate()
+            self.canvas_mod.draw()
+            
+        except Exception as e:
+            self.log(f"ARIMA Analysis Failed: {str(e)}")
