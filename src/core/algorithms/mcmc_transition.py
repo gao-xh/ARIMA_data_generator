@@ -169,51 +169,37 @@ class MCMC_Transition:
             # 6. Operator B: Review & Reorder (Adaptive: Baseline vs Optimized)
             qty_ordered = 0.0
             
-            # Determine Mode (ThesisParams Section 0)
-            # Default to Baseline
-            mode = 'BASELINE'
+            # Determine Mode (Strategy Switching)
             
-            # Use ThesisParams Time Split if possible, or just default to Baseline as we are generating Historical Data.
-            # If the date is after 'test_split_date', we could use Optimized?
-            # BUT: We are likely generating 2023-2024 data (up to Dec 2024).
-            # Thesis says 2024.09-2024.12 is "Optimized Period" for validation.
-            # So we should switch mode!
-            
-            split_date = pd.Timestamp(ThesisParams.SAMPLE_INFO['test_split_date'])
+            # Simple Mode Logic: Check ThesisParams via Global State (modified by SimulationTuner)
+            split_date = pd.Timestamp(ThesisParams.SAMPLE_INFO.get('test_split_date', '2024-09-01'))
             if date >= split_date:
                 mode = 'OPTIMIZED'
-            
+            else:
+                mode = 'BASELINE'
+
             # Check if today is a Review Day
             review_period = self.inventory_control.get_review_period(mode)
-            
-            # For HIGH Volatility in Optimized mode: "Add 1 temp check in Flu/Winter"
-            # Winter: Dec-Feb? Flu: ILI% high?
-            # Simple implementation: Just check period. If mode=Optimized and HighVol, check ILI?
-            # Let's stick to simple Periodicity for now as per "15 days/time" + temp check.
-            # We can implement temp check later if validation fails.
             
             if day % review_period == 0:
                 pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
                 
                 # Demand Estimations
-                # Baseline: Simple Moving Average or just Base Demand (Manual)
-                # Optimized: ARIMA Forecast (Simulated with MAPE)
+                # Baseline: Simple avg
+                # Optimized: ARIMA Forecast (Simulated)
                 
                 avg_demand_est = self.demand_model.raw_demand 
-                # Add Seasonality to Baseline estimate? No, Manual usually ignores it or lags.
-                # Let's keep Baseline simple: Raw Demand.
                 
                 # Optimized Forecast
-                # Synthesize a forecast that has X% MAPE error compared to actual 'daily_demand' (or 'next_period_demand')
-                # But we only know 'daily_demand' for today. Real forecast predicts future.
-                # Let's just use 'daily_demand' * error_factor as a proxy for "Perfect Forecast + Error".
-                
+                # Synthesize a "Perfect" forecast then add error
                 target_mape = ThesisParams.ARIMA_TARGETS.get(self.volatility_cat, {}).get('mape', 0.10)
-                # Random error: N(0, MAPE * 1.25) -> Mean Absolute Error approx MAPE? 
-                # Normal Dist: MAE = sigma * sqrt(2/pi) ~ 0.8 * sigma.
-                # So sigma = MAPE / 0.8 = 1.25 * MAPE.
+                # If HIGH volatility, error is higher
+                if self.volatility_cat == 'HIGH': target_mape *= 1.5
+                
                 sigma_err = target_mape * 1.25
                 forecast_error = np.random.normal(0, sigma_err)
+                
+                # Use ACTUAL daily demand as ground truth for forecast
                 forecast_daily_demand = daily_demand * (1 + forecast_error)
                 if forecast_daily_demand < 0: forecast_daily_demand = 0.1
 
