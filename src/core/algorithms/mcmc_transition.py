@@ -88,9 +88,25 @@ class MCMC_Transition:
             return 'HIGH'
 
     def _initialize_state(self):
-        # Start with 2 months of avg demand
-        avg_demand = self.demand_model.raw_demand
-        total_start_qty = avg_demand * 60
+        # 1. Start with Initial Stock from CSV if available (Thesis Requirement)
+        # drug_info comes from SimulationTuner.py which now deepcopies the CSV row
+        initial_stock = self.drug_info.get('初始库存', None)
+        avg_demand = self.drug_info.get('日均销量', 5.0) # Prefer CSV demand if available
+        
+        try:
+             # Handle string parsing if needed
+             if isinstance(initial_stock, str):
+                 initial_stock = float(initial_stock)
+             if isinstance(avg_demand, str):
+                 avg_demand = float(avg_demand)
+                 
+             if initial_stock is not None and float(initial_stock) > 0:
+                 total_start_qty = float(initial_stock)
+             else:
+                 # Default Fallback: 60 days of demand
+                 total_start_qty = avg_demand * 60
+        except (ValueError, TypeError):
+             total_start_qty = 300.0 # Safe fallback
         
         # Distribute into batches with staggered expiry to simulate steady state
         # Instead of one fresh batch, create 3 batches:
@@ -98,6 +114,7 @@ class MCMC_Transition:
         # 2. Mid (180 days)
         # 3. Near Expiry (60 days) - To trigger early feedback for Tuner
         
+        # Consistent with "Average Inventory ~ Initial Stock"
         self.inventory_batches = [
             {'qty': total_start_qty * 0.5, 'expiry_day': 365, 'entry_day': 0},
             {'qty': total_start_qty * 0.3, 'expiry_day': 180, 'entry_day': -180},
@@ -176,25 +193,38 @@ class MCMC_Transition:
             qty_ordered = 0.0
             
             # Determine Mode (Strategy Switching)
-            
-            # Simple Mode Logic: Check ThesisParams via Global State (modified by SimulationTuner)
             split_date = pd.Timestamp(ThesisParams.SAMPLE_INFO.get('test_split_date', '2024-09-01'))
             if date >= split_date:
                 mode = 'OPTIMIZED'
             else:
                 mode = 'BASELINE'
 
-            # Check if today is a Review Day
+            avg_demand_est = self.demand_model.raw_demand 
+            pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
+
+            if mode == 'BASELINE':
+                # --- Emergency Replenishment Check (Daily) ---
+                # Manual replenishment often panics.
+                # Use InventoryControl with 'EMERGENCY' mode
+                qty_emer = self.inventory_control.calculate_order(
+                    mode='EMERGENCY',
+                    avg_daily_demand=avg_demand_est,
+                    demand_std=avg_demand_est * 0.5, # Rough guess for std
+                    current_inventory_qty=current_inv_total,
+                    pipeline_qty=pipeline_qty
+                )
+                if qty_emer > 0:
+                    qty_ordered = qty_emer
+            
+            # --- Regular Periodic Review (If not ordered) ---
             review_period = self.inventory_control.get_review_period(mode)
             
-            if day % review_period == 0:
+            if qty_ordered <= 0 and day % review_period == 0:
                 pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
                 
                 # Demand Estimations
                 # Baseline: Simple avg
                 # Optimized: ARIMA Forecast (Simulated)
-                
-                avg_demand_est = self.demand_model.raw_demand 
                 
                 # Optimized Forecast
                 # Synthesize a "Perfect" forecast then add error
@@ -214,18 +244,22 @@ class MCMC_Transition:
                 # Determine input demand for calculation
                 demand_input = forecast_daily_demand if mode == 'OPTIMIZED' else avg_demand_est
                 
-                qty_ordered = self.inventory_control.calculate_order(
+                qty_regular = self.inventory_control.calculate_order(
                     mode=mode,
                     avg_daily_demand=demand_input,
                     demand_std=dummy_std,
                     current_inventory_qty=current_inv_total,
                     pipeline_qty=pipeline_qty,
-                    inventory_batches=self.inventory_batches,
+                    # inventory_batches=self.inventory_batches, # Optimized only
                     current_day=day
                 )
                 
-                if qty_ordered > 0:
-                    self._place_order(qty_ordered, day)
+                if qty_regular > 0:
+                    qty_ordered = qty_regular
+
+            # Place Order if any (Emergency OR Regular)
+            if qty_ordered > 0:
+                 self._place_order(qty_ordered, day)
             
             # 7. Record State
             records.append({
@@ -245,25 +279,32 @@ class MCMC_Transition:
         return pd.DataFrame(records)
 
     def _process_deliveries(self, day: int) -> float:
-        # Move arrived orders to inventory
-        arrived = [o for o in self.pipeline_orders if o['arrival_day'] <= day]
-        remaining = [o for o in self.pipeline_orders if o['arrival_day'] > day]
-        
         arrived_qty = 0.0
-        for order in arrived:
-            arrived_qty += order['qty']
-            # Create new batch
-            new_batch = {
-                'qty': order['qty'],
-                'entry_day': day,
-                'expiry_day': day + self.inventory_control.shelf_life
-            }
-            self.inventory_batches.append(new_batch)
-            
-        self.pipeline_orders = remaining
+        remaining_orders = []
+        for order in self.pipeline_orders:
+            if order['arrival_day'] <= day:
+                arrived_qty += order['qty']
+                self.inventory_batches.append({
+                    'qty': order['qty'],
+                    'entry_day': day,
+                    'expiry_day': day + self.inventory_control.shelf_life
+                })
+            else:
+                remaining_orders.append(order)
+        self.pipeline_orders = remaining_orders
         return arrived_qty
 
     def _place_order(self, qty: float, day: int):
+        # 8. Place Order Logic
+        # Floating Lead Time (Thesis Manual Logic)
+        lead_time = self.inventory_control.lead_time + np.random.randint(-1, 2)
+        lead_time = max(1, lead_time)
+        
+        self.pipeline_orders.append({
+            'qty': qty,
+            'arrival_day': day + lead_time
+        })
+
         item_lead = self.inventory_control.lead_time
         arrival = day + item_lead
         self.pipeline_orders.append({

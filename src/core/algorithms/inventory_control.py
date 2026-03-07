@@ -24,7 +24,6 @@ class InventoryControl:
                 self.shelf_life = val
             else:
                 # Thesis Logic: Validity depends on Volatility Category if unknown
-                # Referencing ThesisParams
                 params = ThesisParams.VOLATILITY_BEHAVIOR.get(self.volatility_cat, ThesisParams.VOLATILITY_BEHAVIOR['MEDIUM'])
                 self.shelf_life = float(params['validity_days'])
         except (ValueError, TypeError):
@@ -34,6 +33,19 @@ class InventoryControl:
             self.lead_time = int(drug_info.get('补货提前期', 3))      # Days
         except (ValueError, TypeError):
             self.lead_time = 3
+
+        # Manual Replenishment: Use Initial Stock from CSV as the Target Ceiling?
+        # If Initial Stock is provided, we should align our Replenishment Target to it.
+        # This solves: "Inventory average should hover around initial stock"
+        # However, Inventory sawtooths between Target and (Target - Usage).
+        # So Target needs to be higher than Initial Stock if Initial Stock is the average.
+        # But usually users mean "Fill up to Initial Stock".
+        self.initial_stock_ref = drug_info.get('初始库存', None)
+        try:
+             if self.initial_stock_ref is not None:
+                 self.initial_stock_ref = float(self.initial_stock_ref)
+        except:
+             self.initial_stock_ref = None
 
         # Policy Parameters (To be tuned by Self-Check)
         self._init_policy_params()
@@ -68,8 +80,25 @@ class InventoryControl:
                        current_day: int = 0) -> float:
         """
         Unified Order Calculation Router.
-        Mode: 'BASELINE' (Empirical) or 'OPTIMIZED' (Thesis Section 3.3.1)
+        Mode: 'BASELINE', 'OPTIMIZED', 'EMERGENCY'
         """
+        if mode == 'EMERGENCY':
+             # Emergency Logic: Check if critical low, verify pipeline, order up to safe level.
+             # Threshold: 3 days. Safety Target: 14 days.
+             
+             threshold = avg_daily_demand * 3.0
+             if current_inventory_qty < threshold:
+                 # Check Pipeline: If help on the way is enough, do not panic.
+                 position = current_inventory_qty + pipeline_qty
+                 safety_target = avg_daily_demand * 14.0 # Target 2 weeks
+                 
+                 # If Position is still low (< 7 days), Panic Order.
+                 if position < (avg_daily_demand * 7.0):
+                     # Order up to Safety Target
+                     needed = safety_target - position
+                     return max(0.0, needed)
+             return 0.0
+
         if mode == 'OPTIMIZED':
             return self._calculate_optimized_order(avg_daily_demand, current_inventory_qty, pipeline_qty, inventory_batches, current_day)
         else:
@@ -80,26 +109,41 @@ class InventoryControl:
         """
         Baseline Strategy (Empirical Mode):
         - Manual Periodic Review (R=30 usually)
-        - Safety Stock = Manual Factor * AvgDemand (High buffer)
-        - Target = Avg * (R+L) + SS
+        - Target Level Strategy
         """
-        # Baseline uses simplistic R=30 for most
-        # But for generating 17.2% loss, we need overstocking.
-        # So we use High Safety Factors defined in ThesisParams for 'BASELINE_TARGETS' implicit logic
-        
-        # Consistent with get_review_period
         review_days = self.get_review_period('BASELINE')
         review_horizon = review_days + self.lead_time
         
-        # Empirical Safety Stock Logic (Often just Weeks of Supply)
-        # Low Vol: ~2 weeks safety? High Vol: ~4 weeks?
-        # Thesis mentions "Manual safety stock is 14 days supply approx"
-        # Let's use the Volatility behavior safety factor
+        # 2. Set Target Level (The "Up-to" Level)
+        # User Constraint: "Inventory amount should fluctuate around Initial Stock"
+        # If Initial Stock is provided, we treat it as the "Target Ceiling" (S).
+        # OR as the "Average Inventory".
+        # Let's assume Target S = Max Stock.
+        # Average Inventory will be approx S - (Demand * R / 2).
+        # To make Average = Initial Stock, then S = Initial + (Demand * R / 2).
         
-        ss_qty = self.safety_factor * demand_std * np.sqrt(review_horizon)
+        if self.initial_stock_ref is not None and self.initial_stock_ref > 0:
+            # Shift Target UP so that Average Inventory matches Initial Stock
+            # Avg Inv = S - (Demand * R / 2) => S = Avg Inv + (Demand * R / 2)
+            half_cycle_demand = (avg_daily_demand * review_days) / 2.0
+            
+            # However, if R is large (30 days), this shift is significant.
+            # If user sees "Initial Stock" as the "Full Shelf", then we should use just Initial Stock.
+            # But user said "Mean around Initial".
+            target_level = self.initial_stock_ref + half_cycle_demand
+        else:
+            # Fallback to calculated safety stock
+             ss_qty = self.safety_factor * demand_std * np.sqrt(review_horizon)
+             target_level = (avg_daily_demand * review_horizon) + ss_qty
         
-        target_level = (avg_daily_demand * review_horizon) + ss_qty
         inventory_position = current_inventory + pipeline_inventory
+        
+        # 3. Emergency Logic (Panic Ordering)
+        # If Physical Inventory < 3 days coverage, Order immediately regardless of Review Period?
+        # Typically handled outside of R-check loop, or R becomes 1.
+        # But this function is called ONLY when Review happens (in MCMC_Transition).
+        # Wait, MCMC calls this only "if day % review_period == 0".
+        # So we can't implement Emergency Order HERE if it's not called daily.
         
         return max(0.0, target_level - inventory_position)
 

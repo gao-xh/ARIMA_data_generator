@@ -25,18 +25,25 @@ class SimulationTuner:
         
         # Ensure compatibility with drug_info csv columns
         # Map input keys to internal keys if needed
-        self.drug_info = {
-            '药品ID': drug_info.get('药品ID', 'UNKNOWN'),
-            '药品名称': drug_info.get('药品名称', 'Unknown'),
-            '药品品类': drug_info.get('药品品类', 'Unknown'), # Preserve Category
-            '波动区间分类': drug_info.get('波动区间分类'), # Preserve Volatility logic from CSV
-            # Validity in CSV is MONTHS usually, converted to DAYS in UI loading
-            '有效期': drug_info.get('有效期', 365),
-            '单价': drug_info.get('单价', 35.0),
+        # FIX: Do not strip other fields! We need '初始库存' and '日均销量' for GeneratorV2.
+        self.drug_info = copy.deepcopy(drug_info)
+        
+        # Ensure critical keys exist (defaults)
+        defaults = {
+            '药品ID': 'UNKNOWN',
+            '药品名称': 'Unknown',
+            '药品品类': 'Unknown',
+            '波动区间分类': None,
+            '有效期': 365,
+            '单价': 35.0
         }
+        for k, v in defaults.items():
+            if k not in self.drug_info:
+                self.drug_info[k] = v
         
         # Initialize Tuner validity from Drug Info
-        config.validity_days = int(self.drug_info['有效期'])
+        config.validity_days = int(self.drug_info.get('有效期', 365))
+
         
         self.external_data = external_data
         self.progress_callback = progress_callback

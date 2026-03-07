@@ -30,6 +30,7 @@ class DrugState:
         # User Feedback: Adjustable initial stock OR Reference from CSV
         # If '初始库存' is available in drug_info (from scaled reference), use it as baseline.
         csv_init_stock = drug_info.get('初始库存', None)
+        logger.info(f"Drug: {self.drug_code}, CSV Init Stock: {csv_init_stock}, Base Demand: {self.base_demand}") # DEBUG LOG
         init_days = getattr(config, 'initial_stock_days', 14)
         
         # Randomize initial stock slightly (±20%) to avoid artificial synchronization
@@ -37,10 +38,21 @@ class DrugState:
         
         if csv_init_stock is not None and not pd.isna(csv_init_stock) and float(csv_init_stock) > 0:
             # Use CSV value directly (with noise)
+            # FORCE FIX: If the user passes 'initial_stock_days' explicitly in UI, 
+            # maybe we should RESPECT that override instead of CSV?
+            # User Complaint: "Values not used". 
+            # If they changed the Spinner in UI, they expect that to be used?
+            # BUT the user said "初始信息根本没用上" (Initial INFO didn't use), implying CSV info was ignored.
+            # So sticking to CSV is correct for that complaint.
+            
+            # However, if CSV is 2216 and we see 300, maybe this block is skipped?
             self.inventory = int(float(csv_init_stock) * random_factor)
+            logger.info(f"Using CSV Init Stock: {self.inventory}")
         else:
             # Fallback to calculated days
             self.inventory = int(self.base_demand * init_days * random_factor)
+            logger.info(f"Using Calculated Init Stock: {self.inventory} (Days: {init_days})")
+
         
         # 3. Validity Tracking
         # Thesis Conclusion: Expired stock is "Loss"
