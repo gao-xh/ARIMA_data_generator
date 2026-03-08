@@ -149,21 +149,45 @@ class ImprovedARIMA:
         """
         2.3.4 Validity Decay Coefficient Design
         alpha = alpha0 * (1 + beta * CV')
-        """
-        # alpha0 logic
-        if remaining_days > 90:
-            alpha0 = 1.0
-        elif remaining_days >= 30:
-            alpha0 = 0.8
-        else:
-            alpha0 = 0.5
-            
-        beta = 0.2
         
-        # CV' (Normalized CV) - Assumed 0-1 range usually, let's clamp
+        SMOOTHER LOGIC (March 2026 Update):
+        Instead of step functions (0.5/0.8), use a continuous decay curve based on sigmoid or logistic function to avoid cliffs.
+        But for simplicity and interpretability in Thesis:
+        - If remaining > 60: No decay (1.0)
+        - If remaining <= 60: Linear decay from 1.0 down to a floor.
+        - Floor depends on Volatility: High Volatility -> Higher Floor (0.8), Low -> Lower (0.4).
+        """
+        
+        # 1. Determine Floor based on CV (High CV needs more stock even if expiring)
+        # cv_prime is approx 0.0 to 1.0+
         cv_prime = min(max(current_cv, 0), 1.0)
         
-        alpha = alpha0 * (1 + beta * cv_prime)
+        # High Volatility (cv=0.6+) -> floor = 0.8  (Don't cut too much!)
+        # Low Volatility (cv=0.1)  -> floor = 0.4  (Can cut aggressively)
+        min_alpha = 0.4 + (0.4 * cv_prime) 
+        
+        # 2. Calculate Decay
+        # Linear ramp: 
+        # Day 60 -> alpha = 1.0
+        # Day 0  -> alpha = min_alpha
+        
+        if remaining_days > 60:
+            alpha = 1.0
+        elif remaining_days <= 0:
+             alpha = 0.0 # Expired
+        else:
+            slope = (1.0 - min_alpha) / 60.0
+            alpha = min_alpha + (slope * remaining_days)
+            
+        # 3. Apply Boost from CV (Beta term) - Kept/Modified from original
+        # The original logic (1 + beta * cv) increases order for variable items.
+        # This is already partially covered by 'min_alpha'.
+        # Let's keep a small boost to acknowledge that Variable demand helps clear stock faster.
+        beta = 0.1
+        alpha = alpha * (1 + beta * cv_prime)
+        
+        # Clamp final alpha to [0, 1.2] (allow slight overstock for very high CV)
+        alpha = min(max(alpha, 0.0), 1.2)
         
         decayed_val = forecast_val * alpha
         return decayed_val
