@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import random
 from typing import Dict, Any, List, Optional, Tuple
 import copy
 from src.core.algorithms.mcmc_transition import MCMC_Transition
@@ -64,9 +65,18 @@ class SimulationTuner:
         """
         self._report_progress('start', {'total_days': total_days, 'drug_id': self.drug_info.get('药品ID')})
         
+        # Fixed Seed for Reproducibility across scenarios
+        # Ensures that Demand (Sales) is identical for fair comparison
+        seed_value = 42
+        
         # --- Scenario A: Baseline (Empirical) ---
         # Logic: Fixed R=30, Manual Safety Stock (High Inventory, Low Service Level if Demand Spikes)
         config_a = copy.deepcopy(self.base_config)
+        
+        # Reset Random State for Baseline
+        np.random.seed(seed_value)
+        random.seed(seed_value)
+        
         # Force "Baseline" behavior
         # In current MCMC_Transition, mode is date-dependent. 
         # We need to FORCE the mode.
@@ -96,6 +106,10 @@ class SimulationTuner:
         # The UI config (self.base_config) has the user's chosen values.
         # We need to ensure MCMC uses them in 'OPTIMIZED' mode calculations.
         config_b = copy.deepcopy(self.base_config)
+        
+        # Reset Random State for Optimized (MUST MATCH BASELINE)
+        np.random.seed(seed_value)
+        random.seed(seed_value)
         
         sim_b = MCMC_Transition(config_b, self.drug_info, self.external_data)
         df_b = sim_b.run_simulation(duration_days=total_days)

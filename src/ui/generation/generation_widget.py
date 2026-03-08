@@ -27,6 +27,7 @@ import matplotlib.dates as mdates
 from src.core.tools.simulation_tuner import SimulationTuner
 from src.core.simulation_config import SimulationConfig
 from src.config import DRUG_INFO, EXTERNAL_FACTORS_FILE
+from src.core import constants as C # Import constants
 
 class SimulationWorker(QThread):
     """
@@ -86,15 +87,22 @@ class GenerationWidget(QWidget):
                 # Ensure date parsing
                 date_col = next((c for c in self.ext_df.columns if 'date' in c.lower() or '日期' in c), None)
                 if date_col:
-                    self.ext_df['date'] = pd.to_datetime(self.ext_df[date_col])
+                    # Rename to standard constant if needed
+                    if date_col != C.COL_DATE:
+                        self.ext_df = self.ext_df.rename(columns={date_col: C.COL_DATE})
+                    
+                    self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE])
+                    # Set Index for fast lookup in Tuner/MCMC
+                    self.ext_df = self.ext_df.set_index(C.COL_DATE, drop=False)
             else:
                 # Mock External Data if missing
                 dates = pd.date_range(start='2023-01-01', end='2025-12-31')
                 self.ext_df = pd.DataFrame({
-                    'date': dates, 
+                    C.COL_DATE: dates, 
                     '平均气温': np.random.normal(20, 5, len(dates)),
                     'ILI%': np.random.uniform(0, 0.05, len(dates))
                 })
+                self.ext_df = self.ext_df.set_index(C.COL_DATE, drop=False)
         except Exception as e:
             print(f"Error loading external data: {e}")
 

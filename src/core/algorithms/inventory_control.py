@@ -179,13 +179,18 @@ class InventoryControl:
         # Thesis says "L=4 (replenishment lead time)". Let's use 4 as per optimization design.
         L = 4 
         
-        ss_qty = z * demand_std * np.sqrt(L)
-        
-        # 2. Cycle Stock (Y_hat * T)
+        # Cycle Stock (Y_hat * T)
         # T from Strategy (30 or 15)
-        T = strat['review_period_days']
+        T = strat['review_period_days'] # T
         
-        cycle_stock = forecast_daily_demand * T
+        # CORRECTED FORMULA (Periodic Review):
+        # Protection Interval = T + L
+        # SS = Z * sigma_D * sqrt(T + L)
+        ss_qty = z * demand_std * np.sqrt(T + L)
+        
+        # Target Level = Demand_During(T + L) + SS
+        # cycle_stock variable name kept for compatibility but now covers T+L period average demand
+        cycle_stock = forecast_daily_demand * (T + L)
         
         # 3. Loss Estimate (LSL)
         lsl_qty = 0.0
