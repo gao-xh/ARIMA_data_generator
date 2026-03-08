@@ -32,10 +32,10 @@ class MCMC_Transition:
         
         # Initialize Sub-Algorithms
         self.demand_model = DemandModel(config, drug_info, self.volatility_cat)
-        self.inveize ImprovedARIMA Model
+        # Initialize ImprovedARIMA Model
         self.arima_model = ImprovedARIMA(drug_info=pd.Series(drug_info))
         
-        # Initialntory_control = InventoryControl(config, drug_info, self.volatility_cat)
+        self.inventory_control = InventoryControl(config, drug_info, self.volatility_cat)
         
         # Initial State (Steady State Approximation)
         # Assume starting with decent stock to avoid immediate stockout
@@ -259,6 +259,15 @@ class MCMC_Transition:
                                 'ILI%': C.EXT_FLU,
                                 '流感阳性率': '流感阳性率' 
                              }
+                             
+                             # Auto-map existing columns if present
+                             if '平均气温' in self.external_data.columns:
+                                 col_map['平均气温'] = C.EXT_TEMP
+                             # If constants already used
+                             if C.EXT_TEMP in self.external_data.columns:
+                                 col_map[C.EXT_TEMP] = C.EXT_TEMP
+                             if C.EXT_FLU in self.external_data.columns:
+                                 col_map[C.EXT_FLU] = C.EXT_FLU
 
                              # Mask for historical data
                              mask = self.external_data[C.COL_DATE] < date

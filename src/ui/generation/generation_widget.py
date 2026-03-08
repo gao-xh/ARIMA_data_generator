@@ -16,9 +16,9 @@ from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 
 # Matplotlib Integration
 try:
-    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
 except ImportError:
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
     
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
@@ -280,6 +280,8 @@ class GenerationWidget(QWidget):
         self.tab_dashboard = QWidget()
         dash_lay = QVBoxLayout()
         self.canvas_dash = MplCanvas(self, width=8, height=6, dpi=100)
+        self.toolbar_dash = NavigationToolbar(self.canvas_dash, self)
+        dash_lay.addWidget(self.toolbar_dash)
         dash_lay.addWidget(self.canvas_dash)
         self.tab_dashboard.setLayout(dash_lay)
         self.viz_tabs.addTab(self.tab_dashboard, "Overview Dashboard")
@@ -288,6 +290,8 @@ class GenerationWidget(QWidget):
         self.tab_inv = QWidget()
         inv_lay = QVBoxLayout()
         self.canvas_inv = MplCanvas(self, width=8, height=6, dpi=100)
+        self.toolbar_inv = NavigationToolbar(self.canvas_inv, self)
+        inv_lay.addWidget(self.toolbar_inv)
         inv_lay.addWidget(self.canvas_inv)
         self.tab_inv.setLayout(inv_lay)
         self.viz_tabs.addTab(self.tab_inv, "Inventory Flow")
@@ -571,11 +575,12 @@ class GenerationWidget(QWidget):
         # Top Chart: Demand vs Sales
         for sc in scenarios:
             d = df[df['scenario'] == sc]
-            if sc == 'Baseline': continue # Too cluttered to show demand for both?
             
             # Plot Weekly Rolling Mean to reduce noise
             roll_sales = d['sales'].rolling(7).mean()
-            ax1.plot(d['date'], roll_sales, label=f'Sales ({sc})', color=colors.get(sc, 'blue'))
+            linestyle = '--' if sc == 'Baseline' else '-'
+            ax1.plot(d['date'], roll_sales, label=f'Sales ({sc})', 
+                     color=colors.get(sc, 'blue'), linestyle=linestyle, alpha=0.8)
             
         ax1.set_title("Weekly Average Sales Trend")
         ax1.legend()

@@ -192,22 +192,20 @@ class InventoryControl:
         # cycle_stock variable name kept for compatibility but now covers T+L period average demand
         cycle_stock = forecast_daily_demand * (T + L)
         
-        # 3. Loss Estimate (LSL)
+        # 3. Loss Estimate (LSL) - DISABLED/REMOVED
+        # Thesis Update: Decreasing Order Quantity based on remaining shelf life 
+        # is now handled by reducing the Forecast (Y_hat) in ImprovedARIMA.predict()
+        # via the 'Validity Decay Coefficient'.
+        # Therefore, we do NOT subtract LSL from Inventory Position here, 
+        # as that would mistakenly INCREASE the order quantity (Double Negative).
         lsl_qty = 0.0
-        if inventory_batches:
-            for batch in inventory_batches:
-                days_left = batch['expiry_day'] - current_day
-                coeff = 1.0
-                if days_left <= 30: coeff = 0.5
-                elif days_left <= 90: coeff = 0.8
-                lsl_qty += batch['qty'] * (1.0 - coeff)
             
         # 4. Inventory Position (I)
         total_inventory = current_inventory_qty + pipeline_qty
         
         # 5. Calculate Order (OR)
         # OR = SS + (Y * T) - (I - LSL)
-        effective_inventory = total_inventory - lsl_qty
+        effective_inventory = total_inventory
         target_level = ss_qty + cycle_stock
         
         order_qty = max(0.0, target_level - effective_inventory)
