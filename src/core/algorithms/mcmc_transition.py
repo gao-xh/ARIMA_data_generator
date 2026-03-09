@@ -207,137 +207,159 @@ class MCMC_Transition:
             avg_demand_est = self.demand_model.raw_demand 
             pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
 
-            if mode == 'BASELINE':
-                # --- Emergency Replenishment Check (Daily) ---
-                # Manual replenishment often panics.
-                # Use InventoryControl with 'EMERGENCY' mode
-                qty_emer = self.inventory_control.calculate_order(
-                    mode='EMERGENCY',
-                    avg_daily_demand=avg_demand_est,
-                    demand_std=avg_demand_est * 0.5, # Rough guess for std
-                    current_inventory_qty=current_inv_total,
-                    pipeline_qty=pipeline_qty
-                )
-                if qty_emer > 0:
-                    qty_ordered = qty_emer
+            # Updated Emergency Logic: Active for BOTH Baseline and Optimized
+            # In Optimized mode, we still check against a safety floor (e.g. Lead Time Coverage)
+            # to prevent absolute stockouts if Forecast missed completely.
             
-            # --- Regular Periodic Review (If not ordered) ---
-            review_period = self.inventory_control.get_review_period(mode)
+            # --- Emergency Replenishment Check (Daily) ---
+            # Use average demand estimate. For Optimized, ideally use Forecast but 
+            # avg_demand_est (Historical Mean) acts as a stable floor.
             
-            if qty_ordered <= 0 and day % review_period == 0:
-                pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
+            # Note: For Optimized, we might want to check this BEFORE waiting for Review Period.
+            # But the order logic below "if day % review_period == 0" is the main cycle.
+            # Emergency Order happens immediately (qty_ordered > 0 breaks the cycle).
+            
+            qty_emer = 0.0
+            
+            # 1. Calculate Emergency Order (Safety Net)
+            qty_emer = self.inventory_control.calculate_order(
+                mode='EMERGENCY',
+                avg_daily_demand=avg_demand_est,
+                demand_std=avg_demand_est * 0.5, # Rough guess for std
+                current_inventory_qty=current_inv_total,
+                pipeline_qty=pipeline_qty
+            )
+            
+            if qty_emer > 0:
+                qty_ordered = qty_emer
+            
+            # 2. If no emergency, proceed to Periodic Review
+            if qty_ordered <= 0:
+                # --- Regular Periodic Review (Start of Cycle) ---
+                review_period = self.inventory_control.get_review_period(mode)
                 
-                # Demand Estimations
-                dummy_std = avg_demand_est * 0.5 # For Baseline
-                demand_input = avg_demand_est
-
-                # Optimized Forecast (Using ImprovedARIMA)
-                if mode == 'OPTIMIZED':
-                    # Collect historical data for training
-                    # Convert records so far into DataFrame
-                    # We need minimal columns: Date, Sales (Use Demand as Sales), Ext Factors
-                    # Optimization: Only retrain if we have enough data (e.g. > 90 days)
-                    # and maybe not every time? (Retrain every 30 days?)
-                    # For Thesis compliance: "Rolling Forecast" -> Ideally retrain every period.
+                if day % review_period == 0:
+                    pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
                     
-                    if len(records) > 60:
-                         try:
-                             hist_df = pd.DataFrame(records)
-                             # Map columns to what ImprovedARIMA expects
-                             # records keys: date, demand, etc.
-                             # Constants: COL_DATE='日期', COL_SALES='当日销量（单位）' -> actually usually 'Sales' in simple mode
-                             # Let's map explicitly
-                             train_df = pd.DataFrame({
-                                 C.COL_DATE: hist_df['date'],
-                                 C.COL_SALES: hist_df['demand'], # Use True Demand for Ideal AI or 'sales' for Realistic
-                             })
-                             
-                             # Column Mapping for External Factors (CSV Headers -> Constants)
-                             col_map = {
-                                '平均气温2m(℃)': C.EXT_TEMP,
-                                '平均降水量(mm)': '平均降水量',
-                                'ILI%': C.EXT_FLU,
-                                '流感阳性率': '流感阳性率' 
-                             }
-                             
-                             # Auto-map existing columns if present
-                             if '平均气温' in self.external_data.columns:
-                                 col_map['平均气温'] = C.EXT_TEMP
-                             # If constants already used
-                             if C.EXT_TEMP in self.external_data.columns:
-                                 col_map[C.EXT_TEMP] = C.EXT_TEMP
-                             if C.EXT_FLU in self.external_data.columns:
-                                 col_map[C.EXT_FLU] = C.EXT_FLU
+                    # Demand Estimations
+                    dummy_std = avg_demand_est * 0.5 # For Baseline
+                    demand_input = avg_demand_est
 
-                             # Mask for historical data
-                             mask = self.external_data[C.COL_DATE] < date
-                             exog_hist = self.external_data.loc[mask].copy()
-                             
-                             # Apply specific column renaming
-                             exog_hist = exog_hist.rename(columns=col_map)
-                             
-                             # Merge for Training
-                             full_train_df = pd.merge(train_df, exog_hist, on=C.COL_DATE, how='inner')
-                             
-                             # Train Model
-                             self.arima_model.train(full_train_df)
-                             
-                             # Predict Next Period (T+L)
-                             # We need Future Exog (date to date + T + L)
-                             future_dates = [date + pd.Timedelta(days=i) for i in range(review_period + 7)] # T+L approx
-                             
-                             # Get future exog and rename
-                             future_exog = self.external_data[self.external_data[C.COL_DATE].isin(future_dates)].copy()
-                             future_exog = future_exog.rename(columns=col_map)
-                             
-                        # Calculate min validity for current inventory (Approximation)
-                             min_validity = 365 # Default long validity
-                             if self.inventory_batches:
-                                 # Find minimum remaining days
-                                 min_validity = min([b['expiry_day'] - day for b in self.inventory_batches])
+                    # Optimized Forecast (Using ImprovedARIMA)
+                    if mode == 'OPTIMIZED':
+                        # Collect historical data for training
+                        # Convert records so far into DataFrame
+                        # We need minimal columns: Date, Sales (Use Demand as Sales), Ext Factors
+                        # Optimization: Only retrain if we have enough data (e.g. > 90 days)
+                        # and maybe not every time? (Retrain every 30 days?)
+                        # For Thesis compliance: "Rolling Forecast" -> Ideally retrain every period.
+                        
+                        if len(records) > 60:
+                             try:
+                                 hist_df = pd.DataFrame(records)
+                                 # Map columns to what ImprovedARIMA expects
+                                 # records keys: date, demand, etc.
+                                 # Constants: COL_DATE='日期', COL_SALES='当日销量（单位）' -> actually usually 'Sales' in simple mode
+                                 # Let's map explicitly
+                                 train_df = pd.DataFrame({
+                                     C.COL_DATE: hist_df['date'],
+                                     C.COL_SALES: hist_df['demand'], # Use True Demand for Ideal AI or 'sales' for Realistic
+                                 })
+                                 
+                                 # Column Mapping for External Factors (CSV Headers -> Constants)
+                                 col_map = {
+                                    '平均气温2m(℃)': C.EXT_TEMP,
+                                    '平均降水量(mm)': '平均降水量',
+                                    'ILI%': C.EXT_FLU,
+                                    '流感阳性率': '流感阳性率' 
+                                 }
+                                 
+                                 # Auto-map existing columns if present
+                                 if '平均气温' in self.external_data.columns:
+                                     col_map['平均气温'] = C.EXT_TEMP
+                                 # If constants already used
+                                 if C.EXT_TEMP in self.external_data.columns:
+                                     col_map[C.EXT_TEMP] = C.EXT_TEMP
+                                 if C.EXT_FLU in self.external_data.columns:
+                                     col_map[C.EXT_FLU] = C.EXT_FLU
 
-                             if not future_exog.empty:
-                                 forecast_vals = self.arima_model.predict(
-                                     steps=len(future_exog),
-                                     future_exog_df=future_exog,
-                                     current_stock_validity_days=min_validity # Thesis Logic: Validity Decay
-                                 )
-                                 # Use average of forecast for daily demand param
-                                 if forecast_vals:
-                                     demand_input = max(0.1, np.mean(forecast_vals))
-                                     # Estimate STD from forecast error on validation?
-                                     # Or use residual std from model?
-                                     # For now, keep dummy_std or improve it?
-                                     # ImprovedARIMA doesn't return std yet. Use heuristic:
-                                     # High vol drugs have higher error.
-                                     dummy_std = demand_input * (self.arima_model.cv if hasattr(self.arima_model, 'cv') else 0.5)
-                                     
-                         except Exception as e:
-                             # Fallback to simulated error if training fails (e.g. LinAlgError)
-                             # print(f"ARIMA Train Failed: {e}")
-                             pass
+                                 # Mask for historical data
+                                 mask = self.external_data[C.COL_DATE] < date
+                                 exog_hist = self.external_data.loc[mask].copy()
+                                 
+                                 # Apply specific column renaming
+                                 exog_hist = exog_hist.rename(columns=col_map)
+                                 
+                                 # Merge for Training
+                                 full_train_df = pd.merge(train_df, exog_hist, on=C.COL_DATE, how='inner')
+                                 
+                                 # Train Model
+                                 self.arima_model.train(full_train_df)
+                                 
+                                 # Predict Next Period (T+L)
+                                 # We need Future Exog (date to date + T + L)
+                                 future_dates = [date + pd.Timedelta(days=i) for i in range(review_period + 7)] # T+L approx
+                                 
+                                 # Get future exog and rename
+                                 future_exog = self.external_data[self.external_data[C.COL_DATE].isin(future_dates)].copy()
+                                 future_exog = future_exog.rename(columns=col_map)
+                                 
+                            # Calculate min validity for validity decay
+                                 # Fix/Optimization (March 2026): 
+                                 # Previously used min(expiry) of CURRENT stock, which caused "Destocking" panic 
+                                 # (one old batch would kill the forecast and stop reordering).
+                                 # Now: We differentiate between "Forecast for Clearance" and "Forecast for Replenishment".
+                                 # For Replenishment Target (Target Stock), we assume we are ordering FRESH stock.
+                                 # So using nominal shelf life is safer for Target Level calculation.
+                                 # However, to be Thesis compliant with "Validity Decay", we apply it to the 
+                                 # *Effective Inventory* (in InventoryControl), not the Forecast Target.
+                                 
+                                 # But if we must use predictive decay, let's use a Weighted approach or just Nominal?
+                                 # Using Nominal (Fresh) prevents the "One bad apple spoils the bunch" issue.
+                                 current_validity_input = self.inventory_control.shelf_life # Nominal Fresh
+                                 
+                                 if not future_exog.empty:
+                                     forecast_vals = self.arima_model.predict(
+                                         steps=len(future_exog),
+                                         future_exog_df=future_exog,
+                                         current_stock_validity_days=current_validity_input 
+                                     )
+                                     # Use average of forecast for daily demand param
+                                     if forecast_vals:
+                                         demand_input = max(0.1, np.mean(forecast_vals))
+                                         # Estimate STD from forecast error on validation?
+                                         # Or use residual std from model?
+                                         # For now, keep dummy_std or improve it?
+                                         # ImprovedARIMA doesn't return std yet. Use heuristic:
+                                         # High vol drugs have higher error.
+                                         dummy_std = demand_input * (self.arima_model.cv if hasattr(self.arima_model, 'cv') else 0.5)
+                                         
+                             except Exception as e:
+                                 # Fallback to simulated error if training fails (e.g. LinAlgError)
+                                 # print(f"ARIMA Train Failed: {e}")
+                                 pass
 
-                    # Fallback / Cold Start (Simulated Error)
-                    if demand_input == avg_demand_est and len(records) <= 60:
-                        target_mape = ThesisParams.ARIMA_TARGETS.get(self.volatility_cat, {}).get('mape', 0.10)
-                        if self.volatility_cat == 'HIGH': target_mape *= 1.5
-                        sigma_err = target_mape * 1.25
-                        forecast_error = np.random.normal(0, sigma_err)
-                        demand_input = daily_demand * (1 + forecast_error)
-                        if demand_input < 0: demand_input = 0.1
+                        # Fallback / Cold Start (Simulated Error)
+                        if demand_input == avg_demand_est and len(records) <= 60:
+                            target_mape = ThesisParams.ARIMA_TARGETS.get(self.volatility_cat, {}).get('mape', 0.10)
+                            if self.volatility_cat == 'HIGH': target_mape *= 1.5
+                            sigma_err = target_mape * 1.25
+                            forecast_error = np.random.normal(0, sigma_err)
+                            demand_input = daily_demand * (1 + forecast_error)
+                            if demand_input < 0: demand_input = 0.1
                 
-                qty_regular = self.inventory_control.calculate_order(
-                    mode=mode,
-                    avg_daily_demand=demand_input,
-                    demand_std=dummy_std,
-                    current_inventory_qty=current_inv_total,
-                    pipeline_qty=pipeline_qty,
-                    # inventory_batches=self.inventory_batches, # Optimized only
-                    current_day=day
-                )
-                
-                if qty_regular > 0:
-                    qty_ordered = qty_regular
+                    qty_regular = self.inventory_control.calculate_order(
+                        mode=mode,
+                        avg_daily_demand=demand_input,
+                        demand_std=dummy_std,
+                        current_inventory_qty=current_inv_total,
+                        pipeline_qty=pipeline_qty,
+                        inventory_batches=self.inventory_batches, # Optimized only: Pass batches for expiration check
+                        current_day=day
+                    )
+                    
+                    if qty_regular > 0:
+                        qty_ordered = qty_regular
 
             # Place Order if any (Emergency OR Regular)
             if qty_ordered > 0:
