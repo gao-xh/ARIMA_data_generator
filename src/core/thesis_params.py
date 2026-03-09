@@ -6,6 +6,7 @@ class VolatilityParams(TypedDict):
     flu_sens: float
     season_sens: float
     rain_sens: float        # New: Rainfall sensitivity (Log rain)
+    weekend_mult: float     # New: Day-of-week multiplier
     validity_days: int
     safety_factor: float    # Adjustment factor for the inventory formula
     service_level: float    # Target Service Level (e.g. 0.95)
@@ -27,10 +28,10 @@ class ThesisParams:
         'clinics': 7,
         'population': 83000, # Core service population
         'daily_visits_range': (30, 80),
-        'period_start': '2023-01-01',
-        'period_end': '2024-12-31',
-        'train_split_date': '2024-08-31', # 20 months (83%)
-        'test_split_date': '2024-09-01'   # 4 months (17%)
+        'period_start': '2024-01-01',
+        'period_end': '2025-12-31',
+        'train_split_date': '2025-08-31', # 20 months (83%)
+        'test_split_date': '2025-09-01'   # 4 months (17%)
     }
 
     # 1. Classification Constraints (128 Total)
@@ -50,6 +51,7 @@ class ThesisParams:
             'flu_sens': 0.0,
             'season_sens': 0.32,    # Adjusted to match r=0.32 (Thesis Section 2)
             'rain_sens': 0.0,       # Low vol not affected by rain
+            'weekend_mult': 1.15,   # Higher refills on weekends (Chronic)
             'validity_days': 720,   # Long shelf life -> Low Loss
             'safety_factor': 1.65,  # Z=1.65 for 95% Service Level
             'service_level': 0.95,
@@ -61,6 +63,7 @@ class ThesisParams:
             'flu_sens': 0.8,
             'season_sens': 0.5,
             'rain_sens': 0.3,       # Moderate rain impact
+            'weekend_mult': 0.85,   # Lower acute care visits on weekends
             'validity_days': 360,   # Standard 1 year
             'safety_factor': 1.96,  # Z=1.96 for ~97.5% Service Level (or just 1.5 multiplier)
             'service_level': 0.98,
@@ -72,6 +75,7 @@ class ThesisParams:
             'flu_sens': 2.0,        # Hyper Sensitive to Flu/Weather
             'season_sens': 1.0,
             'rain_sens': 0.5,       # High sensitivity to all external factors
+            'weekend_mult': 0.95,   # No clear pattern (Emergencies equal)
             'validity_days': 180,   # Short shelf life -> High Loss (Target 17.2%)
             'safety_factor': 2.33,  # Z=2.33 for 99% Service Level to prevent stockout
             'service_level': 0.99,

@@ -17,9 +17,15 @@ class MainWindow(QMainWindow):
         # Tab 1: Configuration & Generation
         # "Generate missing dataset" use case
         self.generation_tab = GenerationWidget()
-        self.tabs.addTab(self.generation_tab, "Simulation & Generator")
+        self.tabs.addTab(self.generation_tab, "Strategy Benchmark (Parallel)")
+
+        # Tab 2: Evolution Simulation (New Hybrid Mode)
+        # "Simulation based on split date" use case
+        from src.ui.generation.evolution_widget import EvolutionWidget
+        self.evolution_tab = EvolutionWidget()
+        self.tabs.addTab(self.evolution_tab, "Evolution Simulation (Two-Stage)")
         
-        # Tab 2: Model Validation
+        # Tab 3: Model Validation
         # "Discussion based on target.doc" use case
         self.validation_tab = ValidationWidget()
         self.tabs.addTab(self.validation_tab, "Model Validation")

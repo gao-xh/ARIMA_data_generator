@@ -45,6 +45,7 @@ class DemandModel:
         self.season_sens = params['season_sens']
         # Default to 0.0 if not yet added to all dicts in ThesisParams (though it should be)
         self.rain_sens = params.get('rain_sens', 0.0)
+        self.weekend_mult = params.get('weekend_mult', 1.0)
 
     def generate(self, current_date: pd.Timestamp, external_factors: pd.Series, clinic_scale: float) -> float:
         """Calculate theoretical demand for the day."""
@@ -77,6 +78,10 @@ class DemandModel:
         # Rainfall Impact (New H1 Variable)
         if self.rain_sens > 0:
             demand = CausalImpact.calculate_rainfall_impact(demand, rain, self.rain_sens)
+
+        # Weekend Impact (New: Weekly Seasonality)
+        if hasattr(self, 'weekend_mult') and self.weekend_mult != 1.0:
+             demand = CausalImpact.calculate_weekend_impact(demand, current_date, self.weekend_mult)
 
         # Noise
         eff_sigma = self.config.random_noise_sigma * self.noise_mult

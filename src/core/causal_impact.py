@@ -152,6 +152,19 @@ class CausalImpact:
         return max(0.0, base_demand * factor)
 
     @staticmethod
+    def calculate_weekend_impact(base_demand: float, current_date: any, multiplier: float) -> float:
+        """
+        Thesis Pattern: Weekly Seasonality.
+        Common effect:
+        - Chronic refills often happen on weekends (multiplier > 1.0).
+        - Acute care visits might drop or shift (multiplier < 1.0).
+        """
+        # 5=Saturday, 6=Sunday
+        if current_date.dayofweek >= 5:
+            return base_demand * multiplier
+        return base_demand
+
+    @staticmethod
     def apply_random_noise(demand: float, sigma: float) -> int:
         """
         Thesis Conclusion: Real-world demand has noise ('N +- x').

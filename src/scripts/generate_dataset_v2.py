@@ -45,23 +45,11 @@ def load_data():
 
         # 1.3 Backfill 2023 if needed (Thesis requires 2023 for training)
         min_date = ext_df[C.COL_DATE].min()
-        if min_date.year == 2024:
-            logger.info("External factors start in 2024. Backfilling 2023 data for Thesis training set...")
-            df_2023 = ext_df[ext_df[C.COL_DATE].dt.year == 2024].copy()
-            df_2023[C.COL_DATE] = df_2023[C.COL_DATE] - pd.DateOffset(years=1)
-            # Adjust '日期' or 'Date' original columns if needed, but we rely on C.COL_DATE
-            ext_df = pd.concat([df_2023, ext_df], ignore_index=True)
-            ext_df = ext_df.sort_values(C.COL_DATE).reset_index(drop=True)
-            
-            # CRITICAL: Update the source column so GeneratorV2 doesn't revert it
-            if date_col:
-                if ext_df[date_col].dtype == 'int64' or ext_df[date_col].dtype == 'float64':
-                    ext_df[date_col] = ext_df[C.COL_DATE].dt.strftime('%Y%m%d').astype(int)
-                else:
-                    ext_df[date_col] = ext_df[C.COL_DATE]
-
-            logger.info(f"Data range extended: {ext_df[C.COL_DATE].min().date()} to {ext_df[C.COL_DATE].max().date()}")
-
+        # DISABLED: User requested to align simulation strictly with CSV data range (2024-2025).
+        # We skip backfilling unless critically missing data.
+        if min_date.year > 2024:
+             logger.warning(f"Warning: External data starts late: {min_date}")
+        
         return drug_df, ext_df
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
@@ -81,13 +69,13 @@ def main():
     # - Stockout Rate: ~3.1%
     # - Loss Rate: ~17.2%
     # - Turnover Days: ~44.6
-    # - Period: 2023.01.01 - 2024.12.31 (24 Months)
-    logger.info("Defining Thesis 'Non-Optimized' Baseline Environment (2023-2024)")
+    # - Period: 2024.01.01 - 2025.12.31 (Aligned with Environment CSV)
+    logger.info("Defining Thesis 'Non-Optimized' Baseline Environment (2024-2025)")
     
     # 7 Clinics abstracted as one entity
     config = SimulationConfig(
-        start_date=pd.Timestamp('2023-01-01'),
-        end_date=pd.Timestamp('2024-12-31'), 
+        start_date=pd.Timestamp('2024-01-01'),
+        end_date=pd.Timestamp('2025-12-31'), 
         clinics={
             'Main_Clinic': 1.0,   
         },

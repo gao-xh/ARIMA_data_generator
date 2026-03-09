@@ -59,10 +59,15 @@ class SimulationTuner:
             }
             self.progress_callback(payload)
 
-    def run_simulation_only(self, total_days=730) -> pd.DataFrame:
+    def run_simulation_only(self, total_days=730, evolution_mode=False, split_date=None) -> pd.DataFrame:
         """
         Run side-by-side simulation: Baseline (A) vs Optimized (B).
         Returns a Combined Wide-Format DataFrame for direct comparison.
+        
+        Args:
+            total_days: Duration of simulation
+            evolution_mode: If True, simulate 'Hybrid' (Baseline -> AI) instead of 'Parallel' (AI Only).
+            split_date: Date string (YYYY-MM-DD) for switching from Baseline to AI in Evolution Mode.
         """
         self._report_progress('start', {'total_days': total_days, 'drug_id': self.drug_info.get('药品ID')})
         
@@ -70,21 +75,30 @@ class SimulationTuner:
         # Ensures that Demand (Sales) is identical for fair comparison
         seed_value = 42
         
-        # --- Scenario A: Baseline (Empirical) ---
+        # --- Scenario A: Baseline (Empirical/Counterfactual) ---
+        # In both modes, Scenario A is "What if we NEVER optimize?" (Pure Baseline)
         config_a = copy.deepcopy(self.base_config)
         
         # Reset Random State for Baseline
         np.random.seed(seed_value)
         random.seed(seed_value)
         
-        # Force "Baseline" behavior
-        sim_a = MCMC_Transition(config_a, self.drug_info, self.external_data)
+        # Force "Baseline" behavior settings
         ThesisParams.SAMPLE_INFO['test_split_date'] = '2099-12-31' 
         
+        sim_a = MCMC_Transition(config_a, self.drug_info, self.external_data)
         df_a = sim_a.run_simulation(duration_days=total_days)
         
-        # --- Scenario B: Optimized (AI Models) ---
-        ThesisParams.SAMPLE_INFO['test_split_date'] = '2000-01-01'
+        # --- Scenario B: Optimized Target (AI Models) ---
+        # Mode 1 (Default): Parallel Universe. Assume AI was used from Day 1.
+        # Mode 2 (Evolution): Hybrid. Assume Baseline until split_date, then AI.
+        
+        if evolution_mode and split_date:
+            # Evolution Mode: Switch at specific date
+            ThesisParams.SAMPLE_INFO['test_split_date'] = split_date
+        else:
+            # Benchmark Mode: AI active from start
+            ThesisParams.SAMPLE_INFO['test_split_date'] = '2000-01-01'
         
         config_b = copy.deepcopy(self.base_config)
         
@@ -95,8 +109,8 @@ class SimulationTuner:
         sim_b = MCMC_Transition(config_b, self.drug_info, self.external_data)
         df_b = sim_b.run_simulation(duration_days=total_days)
         
-        # Restore Global State
-        ThesisParams.SAMPLE_INFO['test_split_date'] = '2024-09-01' 
+        # Restore Global State to Default
+        ThesisParams.SAMPLE_INFO['test_split_date'] = '2025-09-01' 
 
         # --- Pivot & Merge for Visualization ---
         # 1. Standardize Dates
