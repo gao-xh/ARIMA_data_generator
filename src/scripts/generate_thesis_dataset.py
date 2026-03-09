@@ -42,7 +42,7 @@ def load_data():
         else:
             # Fallback: Generate if missing
             logger.warning("No date column in external factors. Generating default range.")
-            dates = pd.date_range(start='2023-01-01', end='2024-12-31')
+            dates = pd.date_range(start='2024-01-01', end='2025-12-31')
             ext_df = pd.DataFrame({'date': dates})
             # Add dummy columns if missing
             if '平均气温' not in ext_df.columns: ext_df['平均气温'] = 20.0
@@ -63,10 +63,10 @@ def run_thesis_generation():
     drug_df, ext_df = load_data()
     
     # Configuration
-    # Start: 2023-01-01, End: 2024-12-31 (2 Years)
+    # Start: 2024-01-01, End: 2025-12-31 (2 Years)
     config = SimulationConfig(
-        start_date=pd.Timestamp('2023-01-01'),
-        end_date=pd.Timestamp('2024-12-31'),
+        start_date=pd.Timestamp('2024-01-01'),
+        end_date=pd.Timestamp('2025-12-31'),
         clinics={'Clinic_Total': 1.0} # Aggregate level for Thesis
     )
     

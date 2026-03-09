@@ -83,7 +83,7 @@ class ThesisParams:
         }
     }
 
-    # 3. Target Baseline Metrics (Thesis Section 3 - Current State 2023)
+    # 3. Target Baseline Metrics (Thesis Section 3 - Current State 2024)
     BASELINE_TARGETS = {
         'loss_rate': 0.172,     # 17.2%
         'stockout_rate': 0.031, # 3.1%
@@ -94,8 +94,8 @@ class ThesisParams:
     
     # NEW: Optimization Targets (Thesis Section 3.3.2 - Future State Goal)
     # Comparison Periods:
-    # Baseline (Empirical): 2023.09 - 2023.12
-    # Optimization (Improved): 2024.09 - 2024.12
+    # Baseline (Empirical): 2024.09 - 2024.12
+    # Optimization (Improved): 2025.09 - 2025.12
     OPTIMIZATION_TARGETS = {
         'loss_rate': 0.139,     # Target 13.9% (-19.4%)
         'stockout_rate': 0.024, # Target 2.4% (-22.6%)

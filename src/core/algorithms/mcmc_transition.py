@@ -263,80 +263,81 @@ class MCMC_Transition:
                     dummy_std = avg_demand_est * 0.5 # For Baseline
                     demand_input = avg_demand_est
 
-                        if mode == 'OPTIMIZED':
-                            # Use try-except to prevent crash during optimization
-                            try:
-                                # Collect historical data for training
-                                # Convert records so far into DataFrame
-                                if len(records) > 60:
-                                     hist_df = pd.DataFrame(records)
-                                     # Map columns to what ImprovedARIMA expects
-                                     train_df = pd.DataFrame({
-                                         C.COL_DATE: hist_df['date'],
-                                         C.COL_SALES: hist_df['demand'], 
-                                     })
-                                     
-                                     # Column Mapping for External Factors (CSV Headers -> Constants)
-                                     col_map = {
-                                        '平均气温2m(℃)': C.EXT_TEMP,
-                                        '平均降水量(mm)': '平均降水量',
-                                        'ILI%': C.EXT_FLU,
-                                        '流感阳性率': '流感阳性率' 
-                                     }
-                                     
-                                     # Auto-map existing columns if present
-                                     if '平均气温' in self.external_data.columns:
-                                         col_map['平均气温'] = C.EXT_TEMP
-                                     if C.EXT_TEMP in self.external_data.columns:
-                                         col_map[C.EXT_TEMP] = C.EXT_TEMP
-                                     if C.EXT_FLU in self.external_data.columns:
-                                         col_map[C.EXT_FLU] = C.EXT_FLU
+                    # Optimized Forecast (Using ImprovedARIMA)
+                    if mode == 'OPTIMIZED':
+                        # Use try-except to prevent crash during optimization
+                        try:
+                            # Collect historical data for training
+                            # Convert records so far into DataFrame
+                            if len(records) > 60:
+                                 hist_df = pd.DataFrame(records)
+                                 # Map columns to what ImprovedARIMA expects
+                                 train_df = pd.DataFrame({
+                                     C.COL_DATE: hist_df['date'],
+                                     C.COL_SALES: hist_df['demand'], 
+                                 })
+                                 
+                                 # Column Mapping for External Factors (CSV Headers -> Constants)
+                                 col_map = {
+                                    '平均气温2m(℃)': C.EXT_TEMP,
+                                    '平均降水量(mm)': '平均降水量',
+                                    'ILI%': C.EXT_FLU,
+                                    '流感阳性率': '流感阳性率' 
+                                 }
+                                 
+                                 # Auto-map existing columns if present
+                                 if '平均气温' in self.external_data.columns:
+                                     col_map['平均气温'] = C.EXT_TEMP
+                                 if C.EXT_TEMP in self.external_data.columns:
+                                     col_map[C.EXT_TEMP] = C.EXT_TEMP
+                                 if C.EXT_FLU in self.external_data.columns:
+                                     col_map[C.EXT_FLU] = C.EXT_FLU
 
-                                     # Mask for historical data
-                                     # Ensure date is Timestamp for comparison
-                                     date_ts = pd.Timestamp(date)
-                                     mask = self.external_data[C.COL_DATE] < date_ts
-                                     exog_hist = self.external_data.loc[mask].copy()
+                                 # Mask for historical data
+                                 # Ensure date is Timestamp for comparison
+                                 date_ts = pd.Timestamp(date)
+                                 mask = self.external_data[C.COL_DATE] < date_ts
+                                 exog_hist = self.external_data.loc[mask].copy()
+                                 
+                                 # Apply specific column renaming
+                                 exog_hist = exog_hist.rename(columns=col_map)
+                                 
+                                 # Merge for Training
+                                 full_train_df = pd.merge(train_df, exog_hist, on=C.COL_DATE, how='inner')
+                                 
+                                 if not full_train_df.empty:
+                                     # Train Model
+                                     self.arima_model.train(full_train_df)
                                      
-                                     # Apply specific column renaming
-                                     exog_hist = exog_hist.rename(columns=col_map)
+                                     # Predict Next Period (T+L)
+                                     future_dates = [date_ts + pd.Timedelta(days=i) for i in range(review_period + 7)]
                                      
-                                     # Merge for Training
-                                     full_train_df = pd.merge(train_df, exog_hist, on=C.COL_DATE, how='inner')
+                                     # Get future exog and rename
+                                     future_mask = self.external_data[C.COL_DATE].isin(future_dates)
+                                     future_exog = self.external_data[future_mask].copy()
+                                     future_exog = future_exog.rename(columns=col_map)
                                      
-                                     if not full_train_df.empty:
-                                         # Train Model
-                                         self.arima_model.train(full_train_df)
+                                     # Calculate min validity for validity decay (Nominal Fresh)
+                                     current_validity_input = getattr(self.inventory_control, 'shelf_life', 365)
+                                     
+                                     if not future_exog.empty:
+                                         forecast_vals = self.arima_model.predict(
+                                             steps=len(future_exog),
+                                             future_exog_df=future_exog,
+                                             current_stock_validity_days=current_validity_input 
+                                         )
                                          
-                                         # Predict Next Period (T+L)
-                                         future_dates = [date_ts + pd.Timedelta(days=i) for i in range(review_period + 7)]
+                                         if forecast_vals:
+                                             demand_input = max(0.1, np.mean(forecast_vals))
+                                             # ImprovedARIMA doesn't return std yet. Use heuristic.
+                                             dummy_std = demand_input * (getattr(self.arima_model, 'cv', 0.5))
                                          
-                                         # Get future exog and rename
-                                         future_mask = self.external_data[C.COL_DATE].isin(future_dates)
-                                         future_exog = self.external_data[future_mask].copy()
-                                         future_exog = future_exog.rename(columns=col_map)
-                                         
-                                         # Calculate min validity for validity decay (Nominal Fresh)
-                                         current_validity_input = getattr(self.inventory_control, 'shelf_life', 365)
-                                         
-                                         if not future_exog.empty:
-                                             forecast_vals = self.arima_model.predict(
-                                                 steps=len(future_exog),
-                                                 future_exog_df=future_exog,
-                                                 current_stock_validity_days=current_validity_input 
-                                             )
-                                             
-                                             if forecast_vals:
-                                                 demand_input = max(0.1, np.mean(forecast_vals))
-                                                 # ImprovedARIMA doesn't return std yet. Use heuristic.
-                                                 dummy_std = demand_input * (getattr(self.arima_model, 'cv', 0.5))
-                                             
-                            except Exception as e:
-                                 # Log error but continue
-                                 print(f"ARIMA Optimization Failed at {date}: {str(e)}")
-                                 # Consider importing traceback if needed for deep debug
-                                 # import traceback; traceback.print_exc()
-                                 pass
+                        except Exception as e:
+                             # Log error but continue
+                             print(f"ARIMA Optimization Failed at {date}: {str(e)}")
+                             # Consider importing traceback if needed for deep debug
+                             # import traceback; traceback.print_exc()
+                             pass
 
                         # Fallback / Cold Start (Simulated Error)
                         if demand_input == avg_demand_est and len(records) <= 60:

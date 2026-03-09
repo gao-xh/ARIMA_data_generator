@@ -96,7 +96,7 @@ class EvolutionWidget(QWidget):
                     self.ext_df = self.ext_df.set_index(C.COL_DATE, drop=False)
             else:
                 # Mock External Data if missing
-                dates = pd.date_range(start='2023-01-01', end='2025-12-31')
+                dates = pd.date_range(start='2024-01-01', end='2025-12-31')
                 self.ext_df = pd.DataFrame({
                     C.COL_DATE: dates, 
                     '平均气温': np.random.normal(20, 5, len(dates)),
@@ -382,11 +382,11 @@ class EvolutionWidget(QWidget):
             if self.drug_df is None: return
 
         if idx < 0: idx = 0
-        duration = 365 + 366 
+        duration = 366 + 365 
         
         config = SimulationConfig(
-            start_date=pd.Timestamp('2023-01-01'),
-            end_date=pd.Timestamp('2024-12-31'),
+            start_date=pd.Timestamp('2024-01-01'),
+            end_date=pd.Timestamp('2025-12-31'),
             replenishment_days=int(self.spin_replenish.value()),
             active_clinic_scale=1.0
         )

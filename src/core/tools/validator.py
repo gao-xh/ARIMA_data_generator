@@ -198,8 +198,9 @@ class ThesisValidator:
                 lines.append(f"| {label} | {s_act} | {s_tgt} | {s_dif} | {status} |")
             lines.append("")
 
-        add_section("1. Baseline (经验模式)", baseline, "2023.01 - 2024.08")
-        add_section("2. Optimized (优化后)", optimized, "2024.09 - 2024.12")
+        # Updated for 2024-2025 timeline
+        add_section("1. Baseline (经验模式)", baseline, "2024.01 - 2025.08")
+        add_section("2. Optimized (优化后)", optimized, "2025.09 - 2025.12")
         
         return "\n".join(lines)
 
