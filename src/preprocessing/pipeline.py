@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from typing import Dict, Any
 
 def preprocess_for_model(sales_df: pd.DataFrame, drug_code: str) -> pd.DataFrame:
@@ -35,9 +36,27 @@ def preprocess_for_model(sales_df: pd.DataFrame, drug_code: str) -> pd.DataFrame
         df['当日销量（单位）'] = df['当日销量（单位）'].fillna(0)
         
     # Fill Exog Factors
-    cols_to_fill = ['平均气温', '流感ILI%', '节假日']
+    cols_to_fill = ['平均气温', '流感ILI%', '节假日', '平均降水量', '流感发病率']
     for c in cols_to_fill:
         if c in df.columns:
             df[c] = df[c].interpolate(method='linear').fillna(method='bfill')
+
+    # --- Thesis Requirement: Advanced Data Transformations ---
+    # 1. Log Transform Rainfall: ln(Rain + 1) to handle skewness
+    if '平均降水量' in df.columns:
+        df['Rain_Log'] = np.log1p(df['平均降水量'])
+    else:
+        df['Rain_Log'] = 0.0
+        
+    # 2. Standardize Temperature: (T - mean) / std to remove scale
+    if '平均气温' in df.columns:
+        t_mean = df['平均气温'].mean()
+        t_std = df['平均气温'].std()
+        if t_std != 0:
+            df['Temp_Std'] = (df['平均气温'] - t_mean) / t_std
+        else:
+            df['Temp_Std'] = 0.0
+    else:
+        df['Temp_Std'] = 0.0
             
     return df

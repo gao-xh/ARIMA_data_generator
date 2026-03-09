@@ -50,13 +50,14 @@ class ImprovedARIMA:
             
         elif self.fluctuation_class == C.FLUC_HIGH: # High Volatility (CV > 0.5)
             self.order = (3, 1, 3)
-            # All factors: Season, Temp, Rain, Flu, ILI
-            self.exog_cols = ['S_index', C.EXT_TEMP, '平均降水量', '流感发病率', C.EXT_FLU]
+            # All factors: Season, Temp_Std, Rain_Log, Flu, ILI
+            # Updated to use Transformed Features (Temp_Std, Rain_Log) per Thesis
+            self.exog_cols = ['S_index', 'Temp_Std', 'Rain_Log', '流感发病率', C.EXT_FLU]
             
         else: # Mid Volatility (Default: 0.2 <= CV <= 0.5)
             self.order = (2, 1, 2)
-            # Season, Temp, Rain, Flu
-            self.exog_cols = ['S_index', C.EXT_TEMP, '平均降水量', '流感发病率']
+            # Season, Temp_Std, Rain_Log, Flu
+            self.exog_cols = ['S_index', 'Temp_Std', 'Rain_Log', '流感发病率']
             
         logger.info(f"Model Init | Class: {self.fluctuation_class} | Order: {self.order} | Exog: {self.exog_cols}")
 

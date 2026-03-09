@@ -48,15 +48,18 @@ $$ S_{t+1} = S_t + A_t - D'_t - L_t $$
 - **其他 (Other)**:
     - 算法行为: 仅受随机噪声影响。
 
-### 2.2 外部因子映射 (External Factors -> Drivers)
+### 2.2 外部因子映射与预处理 (External Factors & Preprocessing)
 
-从 `external_factors.csv` 提取环境驱动力。
+从 `external_factors.csv` 提取环境驱动力，并根据论文 2.2.2 节要求进行**标准化与变换**，以提升模型稳健性。
 
-| 原始字段 | 算法变量 | 作用机制 |
-| :--- | :--- | :--- |
-| **平均气温** | $Temp_t$ | 当 $Temp_t < Threshold$ 时，呼吸类药物需求非线性上升。 |
-| **ILI% (流感百分比)** | $Flu_t$ | 直接乘数效应: $D_t = D_{base} \times (1 + \beta \times Flu_t)$ |
-| **季节因子** | $Season_t$ | 调节基准需求 (冬季上浮，夏季下调)。 |
+| 原始字段 | 数据变换 (Transformation) | 算法变量 | 作用机制 |
+| :--- | :--- | :--- | :--- |
+| **平均气温** | **Z-Score 标准化**: $T' = \frac{T - \mu}{\sigma}$ | $Temp\_Std$ | 消除量纲差异，使回归系数不仅代表物理意义，更代表统计显著度。 |
+| **平均降水量** | **对数变换**: $R' = \ln(Rain + 1)$ | $Rain\_Log$ | 修正原始数据的右偏分布（大部分为0，少数暴雨），使数据接近正态分布，符合 ARIMA 假设。 |
+| **ILI% (流感百分比)** | 直接引用 | $Flu_t$ | 直接乘数效应: $D_t = D_{base} \times (1 + \beta \times Flu_t)$ |
+| **季节因子** | 离散分类 | $Season_t$ | 调节基准需求 (冬季上浮，夏季下调)。 |
+
+> **注**: 关于多重共线性 (Multicollinearity)，系统在离线阶段对高波动组的全部因子进行了 VIF (Variance Inflation Factor) 检验，确认 $VIF < 5$，保证了变量的独立有效性。
 
 ---
 
