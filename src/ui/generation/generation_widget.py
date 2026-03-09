@@ -254,6 +254,9 @@ class GenerationWidget(QWidget):
         viz_layout = QVBoxLayout(viz_panel)
         viz_layout.setContentsMargins(0, 0, 0, 0)
         
+        # Create Vertical Splitter for flexible resizing
+        viz_splitter = QSplitter(Qt.Vertical)
+        
         # KPI Table
         self.kpi_table = QTableWidget()
         self.kpi_table.setColumnCount(4)
@@ -261,11 +264,16 @@ class GenerationWidget(QWidget):
         self.kpi_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.kpi_table.verticalHeader().setVisible(False)
         self.kpi_table.setAlternatingRowColors(True)
-        self.kpi_table.setMaximumHeight(200)
-        viz_layout.addWidget(self.kpi_table)
+        # Ensure scrollbars are shown when needed
+        self.kpi_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.kpi_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.kpi_table.setMinimumHeight(100) # Reduced min height to allow user to shrink it and see scrollbar
+        
+        viz_splitter.addWidget(self.kpi_table)
         
         # Charts Area (Tabbed)
         self.viz_tabs = QTabWidget()
+        self.viz_tabs.setMinimumHeight(300) # Ensure charts have enough space
         
         # Tab 1: Overview
         self.plot_overview = PlotWidget()
@@ -283,20 +291,25 @@ class GenerationWidget(QWidget):
         self.plot_loss = PlotWidget()
         self.viz_tabs.addTab(self.plot_loss, "Loss Trend")
         
-        viz_layout.addWidget(self.viz_tabs)
+        viz_splitter.addWidget(self.viz_tabs)
         
         # Logs
         log_group = QGroupBox("System Log")
         log_layout = QVBoxLayout()
         self.log_console = QTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(100)
+        # self.log_console.setMaximumHeight(100) # Allow resizing via splitter
         log_layout.addWidget(self.log_console)
         log_group.setLayout(log_layout)
         
-        # Use splitter for vertical adjustment in right panel too if needed
-        # But for now just simple layout
-        viz_layout.addWidget(log_group)
+        viz_splitter.addWidget(log_group)
+        
+        # Set initial stretch factors (Table: small, Charts: expand, Logs: small)
+        viz_splitter.setStretchFactor(0, 1)
+        viz_splitter.setStretchFactor(1, 10)
+        viz_splitter.setStretchFactor(2, 2)
+        
+        viz_layout.addWidget(viz_splitter)
         
         splitter.addWidget(viz_panel)
         
@@ -590,17 +603,73 @@ class GenerationWidget(QWidget):
             self.plot_loss.canvas.draw()
 
             # KPI Table
+            # 1. Loss Rate (Loss / Sales)
             base_loss = df.get('Baseline_Loss', pd.Series([0])).sum()
             opt_loss = df.get('Optimized_Loss', pd.Series([0])).sum()
-            loss_imp = (base_loss - opt_loss) / base_loss * 100 if base_loss > 0 else 0
+            base_sales = df.get('Baseline_Sales', pd.Series([0])).sum()
+            opt_sales = df.get('Optimized_Sales', pd.Series([0])).sum()
             
-            base_stockout = (df.get('Baseline_Stockout_Flag', pd.Series([0])) > 0).sum()
-            opt_stockout = (df.get('Optimized_Stockout_Flag', pd.Series([0])) > 0).sum()
-            stock_imp = (base_stockout - opt_stockout) / base_stockout * 100 if base_stockout > 0 else 0
+            base_loss_rate = (base_loss / base_sales * 100) if base_sales > 0 else 0.0
+            opt_loss_rate = (opt_loss / opt_sales * 100) if opt_sales > 0 else 0.0
+            loss_imp = base_loss_rate - opt_loss_rate # Reduction (Points)
+
+            # 2. Stockout Rate (Days / Total Days)
+            total_days = len(df) if len(df) > 0 else 1
+            base_stockout_days = (df.get('Baseline_Stockout_Flag', pd.Series([0])) > 0).sum()
+            opt_stockout_days = (df.get('Optimized_Stockout_Flag', pd.Series([0])) > 0).sum()
             
+            base_stock_rate = (base_stockout_days / total_days * 100)
+            opt_stock_rate = (opt_stockout_days / total_days * 100)
+            stock_imp = base_stock_rate - opt_stock_rate # Reduction (Points)
+            
+            # 3. Backlog Rate (Inventory > 90 days supply)
+            # Threshold: Inventory > 90 * Avg Daily Demand (approx 3 months)
+            base_avg_sales = base_sales / total_days if total_days > 0 else 1.0
+            opt_avg_sales = opt_sales / total_days if total_days > 0 else 1.0
+            
+            base_backlog_days = (df.get('Baseline_Inventory', pd.Series([0])) > (90 * base_avg_sales)).sum()
+            opt_backlog_days = (df.get('Optimized_Inventory', pd.Series([0])) > (90 * opt_avg_sales)).sum()
+            
+            base_backlog_rate = base_backlog_days / total_days * 100
+            opt_backlog_rate = opt_backlog_days / total_days * 100
+            backlog_imp = base_backlog_rate - opt_backlog_rate # Reduction (Points)
+            
+            # 4. Turnover Days (Avg Inv / Avg Daily Sales)
+            base_avg_inv = df.get('Baseline_Inventory', pd.Series([0])).mean()
+            opt_avg_inv = df.get('Optimized_Inventory', pd.Series([0])).mean()
+            
+            base_turnover = base_avg_inv / base_avg_sales if base_avg_sales > 0 else 0.0
+            opt_turnover = opt_avg_inv / opt_avg_sales if opt_avg_sales > 0 else 0.0
+            turnover_imp = base_turnover - opt_turnover # Reduction (Days)
+            
+            # 5. Funds Occupied (Avg Inventory Value)
+            base_fund = df.get('Baseline_Fund', pd.Series([0])).mean()
+            opt_fund = df.get('Optimized_Fund', pd.Series([0])).mean()
+            fund_imp = (base_fund - opt_fund) / base_fund * 100 if base_fund > 0 else 0.0 # Reduction (%)
+
+            # 6. Model Fit (MAPE) - Forecast Accuracy
+            # Note: Lower MAPE is better
+            base_demand = df.get('Baseline_Demand', pd.Series([0]))
+            base_forecast = df.get('Baseline_Forecast', pd.Series([0]))
+            opt_demand = df.get('Optimized_Demand', pd.Series([0]))
+            opt_forecast = df.get('Optimized_Forecast', pd.Series([0]))
+            
+            def safe_mape(y_true, y_pred):
+                mask = (y_true > 0.1) & (y_pred > 0) # Avoid div by zero
+                if not mask.any(): return 0.0
+                return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+                
+            base_mape = safe_mape(base_demand.values, base_forecast.values)
+            opt_mape = safe_mape(opt_demand.values, opt_forecast.values)
+            mape_imp = base_mape - opt_mape # Reduction (Positive is good)
+
             metrics = [
-                ("Total Loss", f"{base_loss:.0f}", f"{opt_loss:.0f}", f"{loss_imp:.1f}%"),
-                ("Stockout Days", f"{base_stockout}", f"{opt_stockout}", f"{stock_imp:.1f}%")
+                ("Loss Rate (损耗率)", f"{base_loss_rate:.2f}%", f"{opt_loss_rate:.2f}%", f"{loss_imp:.2f} pts"),
+                ("Stockout Rate (缺货率)", f"{base_stock_rate:.2f}%", f"{opt_stock_rate:.2f}%", f"{stock_imp:.2f} pts"),
+                ("Backlog Rate (积压率)", f"{base_backlog_rate:.2f}%", f"{opt_backlog_rate:.2f}%", f"{backlog_imp:.2f} pts"),
+                ("Turnover Days (周转天数)", f"{base_turnover:.1f}", f"{opt_turnover:.1f}", f"{turnover_imp:.1f}"),
+                ("Funds Occupied (资金占用)", f"{base_fund:.0f}", f"{opt_fund:.0f}", f"{fund_imp:.1f}%"),
+                ("Model MAPE (贴合度)", f"{base_mape:.1f}%", f"{opt_mape:.1f}%", f"{mape_imp:.1f} pts")
             ]
             
             self.kpi_table.setRowCount(len(metrics))
@@ -610,10 +679,19 @@ class GenerationWidget(QWidget):
                 self.kpi_table.setItem(i, 2, QTableWidgetItem(o))
                 
                 item_imp = QTableWidgetItem(imp)
-                if float(imp.strip('%')) > 0:
-                    item_imp.setForeground(QColor('green'))
+                # Logic: Is positive value Good or Bad?
+                # All these metrics (Loss, Stockout, Backlog, Turnover, Funds, MAPE) are "Lower is Better"
+                # So Positive Imp (Base > Opt) means Improvement -> Green
+                # Negative Imp (Base < Opt) means Worsening -> Red
+                
+                val = float(imp.split()[0].replace('%', ''))
+                if val > 0:
+                    item_imp.setForeground(QColor('green')) # Improvement
+                elif val < 0:
+                    item_imp.setForeground(QColor('red'))   # Worsening
                 else:
-                    item_imp.setForeground(QColor('red'))
+                    item_imp.setForeground(QColor('black'))
+
                 self.kpi_table.setItem(i, 3, item_imp)
                 
         except Exception as e:

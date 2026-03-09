@@ -84,16 +84,28 @@ class InventoryControl:
         """
         if mode == 'EMERGENCY':
              # Emergency Logic: Check if critical low, verify pipeline, order up to safe level.
-             # Threshold: 3 days. Safety Target: 14 days.
+             # Threshold: Lead Time based (ensure explicit coverage during L).
+             # Baseline Panic: 3 days. Optimized Safety Net: Lead Time (approx 3-6 days).
              
-             threshold = avg_daily_demand * 3.0
+             # Use dynamic Lead Time or default 3
+             lt_days = max(1.0, float(self.lead_time))
+             
+             # Metric 1: Immediate Danger Threshold (Stock < Lead Time demand)
+             threshold = avg_daily_demand * lt_days
+             
              if current_inventory_qty < threshold:
                  # Check Pipeline: If help on the way is enough, do not panic.
                  position = current_inventory_qty + pipeline_qty
-                 safety_target = avg_daily_demand * 14.0 # Target 2 weeks
                  
-                 # If Position is still low (< 7 days), Panic Order.
-                 if position < (avg_daily_demand * 7.0):
+                 # Safety Target: Covers L + Review Period (approx 7-14 days buffer)
+                 safety_target_days = lt_days + 14.0 
+                 safety_target = avg_daily_demand * safety_target_days
+                 
+                 # Logic Update: If Position < Critical Level (Lead Time + small buffer), Panic Order.
+                 # Only trigger if the pipeline + on_hand is dangerously low.
+                 critical_level = avg_daily_demand * (lt_days + 2.0)
+                 
+                 if position < critical_level:
                      # Order up to Safety Target
                      needed = safety_target - position
                      return max(0.0, needed)
@@ -192,20 +204,29 @@ class InventoryControl:
         # cycle_stock variable name kept for compatibility but now covers T+L period average demand
         cycle_stock = forecast_daily_demand * (T + L)
         
-        # 3. Loss Estimate (LSL) - DISABLED/REMOVED
-        # Thesis Update: Decreasing Order Quantity based on remaining shelf life 
-        # is now handled by reducing the Forecast (Y_hat) in ImprovedARIMA.predict()
-        # via the 'Validity Decay Coefficient'.
-        # Therefore, we do NOT subtract LSL from Inventory Position here, 
-        # as that would mistakenly INCREASE the order quantity (Double Negative).
-        lsl_qty = 0.0
-            
-        # 4. Inventory Position (I)
+        # 3. Anticipated Expiration Loss (LSL) - RE-ENABLED via Logic Update (March 2026)
+        # Goal: If existing stock will expire before the next replenishment arrives (or during coverage period),
+        # we must treat it as "unavailable" for future demand and order more to compensate.
+        # Protection Period = T + L
+        protection_days = T + L
+        anticipated_loss_qty = 0.0
+        
+        if inventory_batches:
+            expiry_threshold = current_day + protection_days
+            # Sum up qty of batches that will expire within the protection period
+            # These units cannot cover the full demand of the period.
+            for batch in inventory_batches:
+                if batch['expiry_day'] <= expiry_threshold:
+                    anticipated_loss_qty += batch['qty']
+        
+        # 4. Effective Inventory Position (I_eff)
+        # I_eff = (Current On-Hand + Pipeline) - Anticipated Expiry
         total_inventory = current_inventory_qty + pipeline_qty
+        effective_inventory = total_inventory - anticipated_loss_qty
         
         # 5. Calculate Order (OR)
-        # OR = SS + (Y * T) - (I - LSL)
-        effective_inventory = total_inventory
+        # OR = Target - I_eff
+        # Target Level = SS + Cycle Stock
         target_level = ss_qty + cycle_stock
         
         order_qty = max(0.0, target_level - effective_inventory)
@@ -213,24 +234,40 @@ class InventoryControl:
 
     def check_expiration(self, inventory_batches: List[Dict[str, Any]], current_day: int) -> Tuple[float, List[Dict[str, Any]]]:
         """
-        Check for expired batches in inventory.
+        Check for expired batches in inventory AND apply random natural loss (breakage/theft).
         Returns (expired_qty, updated_batches)
         """
-        expired_qty = 0.0
+        loss_qty = 0.0
         updated_batches = []
         
+        # 1. Random Natural Loss Probability (0.1% chance per batch per day)
+        # Simulates breakage, theft, or storage damage
+        import random
+        
         for batch in inventory_batches:
+            # Check Expiry
             if batch['expiry_day'] <= current_day:
-                expired_qty += batch['qty']
+                loss_qty += batch['qty']
             else:
-                updated_batches.append(batch)
-                
-        return expired_qty, updated_batches
+                # Check Natural Loss
+                # Apply small probability of unit loss
+                if batch['qty'] > 0 and random.random() < 0.05: # 5% daily chance of incident
+                     loss_amount = min(batch['qty'], random.uniform(0.1, 1.0))
+                     loss_qty += loss_amount
+                     batch['qty'] -= loss_amount
 
-    def consume_stock(self, inventory_batches: List[Dict[str, Any]], demand_qty: float) -> Tuple[float, List[Dict[str, Any]]]:
+                if batch['qty'] > 0.01:
+                    updated_batches.append(batch)
+                
+        return loss_qty, updated_batches
+
+    def consume_stock(self, inventory_batches: List[Dict[str, Any]], demand_qty: float, current_day: int) -> Tuple[float, List[Dict[str, Any]]]:
         """
-        Consume stock (FIFO/FEFO) to satisfy demand.
-        Returns (satisfied_qty, updated_batches)
+        Consume stock to satisfy demand.
+        Logic:
+        1. Try FEFO (First Expired First Out).
+        2. Apply "Consumer Rejection" logic: If the FEFO batch is near expiry, 
+           a portion of customers will skip it and demand fresher stock.
         """
         # Sort by expiry (FEFO) - First Expiry First Out
         inventory_batches.sort(key=lambda x: x['expiry_day'])
@@ -239,21 +276,85 @@ class InventoryControl:
         remaining_demand = demand_qty
         updated_batches = []
         
+        # 1. Process "Freshness Skipping" Logic
+        # Iterate through batches, but allow "skipping" to simulate customers picking fresher items.
+        # This leaves old stock on the shelf to eventually expire.
+        
+        temp_batches = [] # To store processed state
+        
         for batch in inventory_batches:
             if remaining_demand <= 0:
-                updated_batches.append(batch)
+                temp_batches.append(batch)
                 continue
                 
-            if batch['qty'] > remaining_demand:
-                # Partial batch consumption
-                satisfied_qty += remaining_demand
-                batch['qty'] -= remaining_demand
-                updated_batches.append(batch)
-                remaining_demand = 0
-            else:
-                # Full batch consumption
-                satisfied_qty += batch['qty']
-                remaining_demand -= batch['qty']
-                # Batch removed (not appended to updated)
-        
+            qty_available = batch['qty']
+            qty_to_take = 0.0
+            
+            # Smart Consumption Logic
+            days_remaining = batch['expiry_day'] - current_day
+            
+            # Acceptance Probability based on Remaining Shelf Life
+            # If > 180 days: 100% Acceptance
+            # If < 30 days: 10% Acceptance (Most skip it)
+            # If < 60 days: 40% Acceptance
+            # If < 90 days: 70% Acceptance
+            
+            acceptance_rate = 1.0
+            if days_remaining < 30: acceptance_rate = 0.1
+            elif days_remaining < 60: acceptance_rate = 0.4
+            elif days_remaining < 90: acceptance_rate = 0.7
+            
+            # Calculate potential purchase from this batch
+            # Customer wants X, but only accepts rate*X from this "old" batch
+            # The rest of the demand is deferred to the NEXT batch (if any)
+            # BUT: If this is the LAST batch, they might be forced to take it (Stockout avoidance)
+            # Let's assume they skip it and it becomes Lost Sale OR they take it if desperate?
+            # User wants "Buy longer shelf life", implying they skip this and go to next.
+            
+            desired_from_this_batch = remaining_demand
+            
+            # "Skipping" behavior: Only a portion of demand interacts with this batch
+            # Effectively, the demand "passes through" the bad batches looking for good ones.
+            # But physically, we iterate FEFO.
+            # So: We try to fill 'remaining_demand' from 'batch'.
+            # BUT we only effectively draw `min(qty, remaining * accept)`?
+            # No, if I skip, I want the next batch.
+            pass # Logic implemented below
+            
+            # Actual implementation:
+            # We split the demand into "Willing to take this" and "Must skip for fresher"
+            # But since "Must skip" just adds to valid demand for next batch, it's the same as
+            # "This batch can only satisfy X amount due to rejection".
+            
+            # However, if it's the ONLY batch left, do they take it?
+            # Let's say 50% desperation rate if no fresher option.
+            # For now, simplistic: Max consumption from this batch is limited by acceptance rate * its own qty?
+            # No, limited by acceptance rate * REMAINING DEMAND.
+            
+            willing_to_buy = remaining_demand * acceptance_rate
+            
+            # Take what we can (limited by willingness AND availability)
+            actually_taken = min(qty_available, willing_to_buy)
+            
+            # Update batch and demand
+            batch['qty'] -= actually_taken
+            satisfied_qty += actually_taken
+            remaining_demand -= actually_taken # The satisfied part is gone.
+            
+            # The UNSATISFIED part (remaining_demand) continues to the next loop (fresh batch).
+            # If batch had remaining qty (because we skipped it), it stays in inventory.
+            
+            if batch['qty'] > 0.001:
+                temp_batches.append(batch)
+                
+        # If we went through all batches and still have demand (because we skipped old stuff 
+        # but ran out of fresh stuff), do we go back?
+        # Realistically, customers might leave (Lost Sales due to Quality).
+        # Or we force-feed the old stuff if we want to minimize stockouts.
+        # User said "Buy longer shelf life drug", implying if none available, they might not buy short one?
+        # Let's assume strict preference. Unfulfilled demand here = Lost Sale due to "Quality/Expiry Aversion".
+        # This increases Stockout Rate (technically "Quality Stockout").
+        # AND it leaves old stock to expire (Loss Rate increases). This meets the user requirement perfectly.
+
+        updated_batches = temp_batches
         return satisfied_qty, updated_batches

@@ -106,21 +106,34 @@ class SimulationTuner:
              df_b = df_b.rename(columns={'date': C.COL_DATE})
              
         # 2. Select and Rename Metrics
-        cols_to_keep = [C.COL_DATE, 'inventory', 'loss', 'stockout_flag', 'sales']
-        
+        cols_to_keep = [C.COL_DATE, 'inventory', 'loss', 'stockout_flag', 'sales', 'money_tied_up', 'forecast', 'demand']
+
         # Helper to process DF
         def process_df(df, prefix):
             # Check for missing columns (e.g. if simulation failed/empty)
             for c in cols_to_keep:
-                if c not in df.columns:
+                if c not in df.columns and c != 'money_tied_up':
                     df[c] = 0
-            
+                
+                # Calculate Funds Occupied if not present
+                if c == 'money_tied_up' and c not in df.columns:
+                     # Inventory * Price
+                     # Assuming 'inventory' col exists and price is constant
+                     unit_price = float(self.drug_info.get('单价', 35.0))
+                     if 'inventory' in df.columns:
+                         df[c] = df['inventory'] * unit_price
+                     else:
+                         df[c] = 0.0
+
             sub = df[cols_to_keep].copy()
             rename_map = {
                 'inventory': f'{prefix}_Inventory',
                 'loss': f'{prefix}_Loss',
                 'stockout_flag': f'{prefix}_Stockout_Flag',
-                'sales': f'{prefix}_Sales'
+                'sales': f'{prefix}_Sales',
+                'money_tied_up': f'{prefix}_Fund',
+                'forecast': f'{prefix}_Forecast',
+                'demand': f'{prefix}_Demand'
             }
             return sub.rename(columns=rename_map)
 

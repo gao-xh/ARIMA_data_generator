@@ -114,16 +114,31 @@ class MCMC_Transition:
              total_start_qty = 300.0 # Safe fallback
         
         # Distribute into batches with staggered expiry to simulate steady state
-        # Instead of one fresh batch, create 3 batches:
-        # 1. Fresh (365 days)
-        # 2. Mid (180 days)
-        # 3. Near Expiry (60 days) - To trigger early feedback for Tuner
+        # Create multiple batches with decreasing validity to simulate real-world inventory aging.
+        # This prevents the "0 loss" issue where all initial stock is fresh and sells out before expiring.
+        validity = self.config.validity_days if hasattr(self.config, 'validity_days') else 365
         
-        # Consistent with "Average Inventory ~ Initial Stock"
+        # Batch 1: Fresh (Most stock)
+        # Batch 2: Aged (Mid-life)
+        # Batch 3: Near Expiry (Risk stock)
+        
+        # Critical adjustment for Loss Generation:
+        # We set the "Risk Stock" to have a remaining life of 35-50 days.
+        # This falls into the "acceptance_rate = 0.4" bucket (30-60 days).
+        # Customers will buy it slowly (40% rate), but not fast enough to clear it all.
+        # This creates a steady stream of expiry over the first 1-2 months, rather than a single explosion on Day 10.
+        import random
+        risk_days = random.randint(35, 55) 
+
         self.inventory_batches = [
-            {'qty': total_start_qty * 0.5, 'expiry_day': 365, 'entry_day': 0},
-            {'qty': total_start_qty * 0.3, 'expiry_day': 180, 'entry_day': -180},
-            {'qty': total_start_qty * 0.2, 'expiry_day': 60,  'entry_day': -300}
+            # Batch 1: Fresh (60% stock) - Healthy
+            {'qty': total_start_qty * 0.6, 'expiry_day': validity, 'entry_day': 0},
+            
+            # Batch 2: Aged (25% stock) - Mid-life
+            {'qty': total_start_qty * 0.25, 'expiry_day': int(validity * 0.5), 'entry_day': -int(validity * 0.5)},
+            
+            # Batch 3: Risk Stock (15% stock) - Approaching rejection threshold
+            {'qty': total_start_qty * 0.15, 'expiry_day': risk_days,  'entry_day': -(validity - risk_days)}
         ]
 
     def get_snapshot(self) -> Dict[str, Any]:
@@ -188,7 +203,7 @@ class MCMC_Transition:
             current_inv_total = sum(b['qty'] for b in self.inventory_batches)
             
             actual_sales, self.inventory_batches = self.inventory_control.consume_stock(
-                self.inventory_batches, daily_demand
+                self.inventory_batches, daily_demand, day
             )
             
             stockout_qty = daily_demand - actual_sales
@@ -205,6 +220,9 @@ class MCMC_Transition:
                 mode = 'BASELINE'
 
             avg_demand_est = self.demand_model.raw_demand 
+            if 'demand_input' not in locals():
+                demand_input = avg_demand_est
+                
             pipeline_qty = sum(o['qty'] for o in self.pipeline_orders)
 
             # Updated Emergency Logic: Active for BOTH Baseline and Optimized
@@ -369,7 +387,8 @@ class MCMC_Transition:
             records.append({
                 'date': date,
                 'drug_id': self.drug_id,
-                'demand': daily_demand,
+                'demand': daily_demand,   # True Demand (for verification)
+                'forecast': demand_input, # Forecast used for ordering (SMA or ARIMA Mean)
                 'sales': actual_sales,
                 'inventory': current_inv_total,
                 'replenishment': arrived_today,
