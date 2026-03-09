@@ -487,9 +487,17 @@ class EvolutionWidget(QWidget):
         self.worker.error.connect(self.on_simulation_error)
         self.worker.start()
 
+    def closeEvent(self, event):
+        """Cleanup thread when widget closes."""
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.terminate()
+            self.worker.wait()
+        super().closeEvent(event)
+
     def on_simulation_finished(self, df: pd.DataFrame):
         self.btn_run.setEnabled(True)
         self.btn_run.setText("Run Evolution")
+        self.log_console.append(df.iloc[-1].to_string())
         self.log_console.append(f"Data generated. Rows: {len(df)}")
         self.update_dashboard(df)
 

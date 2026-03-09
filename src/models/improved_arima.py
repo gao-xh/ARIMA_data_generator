@@ -213,12 +213,20 @@ class ImprovedARIMA:
             # Use enforce_stationarity=False and enforce_invertibility=False to avoid 
             # "Non-stationary starting autoregressive parameters" warnings and improve convergence
             # on short or noisy datasets.
+            # Suppress generic warnings for clean UI
+            import warnings
+            from statsmodels.tools.sm_exceptions import ConvergenceWarning
+            warnings.simplefilter('ignore', ConvergenceWarning)
+
             self.model = ARIMA(endog, exog=exog, order=self.order, 
                              enforce_stationarity=False, 
                              enforce_invertibility=False)
                  
-            # Increase maxiter to help convergence
-            self.model_fit = self.model.fit(method_kwargs={"maxiter": 300})
+            # Increase maxiter to help convergence and use 'powell' or 'lbfgs' if default fails (optional, keep default for now)
+            # Retain current strategy but catch any remaining warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                self.model_fit = self.model.fit(method_kwargs={"maxiter": 500, "disp": 0})
             
             # --- Print Model Coefficients to Verify External Factors ---
             try:
