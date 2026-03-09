@@ -8,6 +8,7 @@ from src.core.simulation_config import SimulationConfig
 from src.core.thesis_params import ThesisParams
 from src.core import constants as C
 from src.models.improved_arima import ImprovedARIMA
+from src.models.traditional_arima import TraditionalARIMA 
 
 class SimulationTuner:
     """
@@ -218,95 +219,62 @@ class SimulationTuner:
             test_data = validation_df.loc[test_mask]
             
             if len(train_data) > 60 and len(test_data) > 0:
-                 # Instantiate Model
-                 # Need drug_info Series
                  drug_series = pd.Series(self.drug_info)
-                 validator_model = ImprovedARIMA(drug_series)
-                 
-                 # Train on Historical Data
-                 validator_model.train(train_data)
-                 
-                 # Get In-Sample Metrics (Training R2/AIC)
-                 train_metrics = validator_model.get_metrics()
-                 
-                 # Predict Test Period (Out-of-Sample)
-                 # We predict step-by-step or one-shot? 
-                 # Standard validation: usually one-shot forecast for short term, or rolling.
-                 # Let's do a one-shot forecast for the test duration (e.g. 120 days)
-                 # This shows the model's pure predictive power without updates.
-                 
-                 steps = len(test_data)
-                 exog_future = test_data  # Prepare_data inside predict handles the column selection
-                 
-                 forecast_values = validator_model.predict(steps, exog_future)
-                 
-                 # Calculate Out-of-Sample Metrics
-                 y_true = test_data[C.COL_SALES].values
-                 y_pred = np.array(forecast_values)
-                 
-                 # Handle length mismatch (rare)
-                 min_len = min(len(y_true), len(y_pred))
-                 y_true = y_true[:min_len]
-                 y_pred = y_pred[:min_len]
-                 
-                 from sklearn.metrics import r2_score, mean_squared_error
-                 
-                 # Optimization: Resample to Weekly Average to smooth out daily noise
-                 # This aligns with thesis requirement to capture "Trend" rather than "Daily Jitter"
-                 eval_df = pd.DataFrame({
-                     'y_true': y_true,
-                     'y_pred': y_pred
-                 }, index=test_data[C.COL_DATE][:min_len])
-                 
-                 # Use Weekly Mean (W) - preserves scale of "Avg Daily Sales"
-                 eval_weekly = eval_df.resample('W').mean()
-                 
-                 # Drop NaN (from partial weeks if any)
-                 eval_weekly = eval_weekly.dropna()
-                 
-                 if len(eval_weekly) > 2:
-                     r2_out = r2_score(eval_weekly['y_true'], eval_weekly['y_pred'])
-                     rmse_out = np.sqrt(mean_squared_error(eval_weekly['y_true'], eval_weekly['y_pred']))
-                 else:
-                     # Fallback to daily if not enough weeks
-                     r2_out = r2_score(y_true, y_pred)
-                     rmse_out = np.sqrt(mean_squared_error(y_true, y_pred))
-                 
-                 # Update model_metrics with this "Pure" validation
-                 # Overwrite or Add? Add.
-                 model_metrics['r2_train'] = train_metrics.get('r2', 0)
-                 model_metrics['aic'] = train_metrics.get('aic', 0)
-                 model_metrics['order'] = train_metrics.get('order', None)
-                 
-                 # Store Test Metrics (used by UI for 'Forecast R2')
-                 # We store them in a way UI can pick them up?
-                 # UI looks at `getattr(df, 'attrs', {})`
-                 # Maybe we add a dedicated key 'validation_metrics'
-                 model_metrics['r2_test'] = r2_out
-                 model_metrics['rmse_test'] = rmse_out
-                 
-                 full_df.attrs['model_metrics'] = model_metrics
-                 
-                 # Optional: Attach the Pure Forecast to the DataFrame for plotting?
-                 # Create a Series indexed by date
-                 forecast_series = pd.Series(y_pred, index=test_data[C.COL_DATE][:min_len])
-                 # Map back to full_df
-                 full_df['Pure_ARIMAX_Forecast'] = full_df[C.COL_DATE].map(forecast_series).fillna(0) # Keep 0 for pre-forecast period
 
-                 # Also attach the Fitted Values (Training Period)
-                 # validator_model.model_fit.fittedvalues is a Series with DatetimeIndex (if train_data was indexed)
-                 # But train_data index was reset?
-                 # ImprovedARIMA.train() calls prepare_data which sets index. 
-                 # So fittedvalues index should be correct DATES.
+                 # 1. Enhanced ARIMAX (Proposed)
                  try:
-                     fitted_vals = validator_model.model_fit.fittedvalues
-                     # Reindex to full_df dates
-                     full_df['Pure_ARIMAX_Fitted'] = full_df[C.COL_DATE].map(fitted_vals)
+                     validator_model = ImprovedARIMA(drug_series)
+                     validator_model.train(train_data)
+                     
+                     # Fitted Values
+                     # ImprovedARIMA.train calculates fittedvalues (with DatetimeIndex)
+                     if validator_model.model_fit is not None:
+                        fitted_vals = validator_model.model_fit.fittedvalues
+                        
+                        # Ensure 'Date' in full_df is proper datetime for mapping
+                        if not pd.api.types.is_datetime64_any_dtype(full_df[C.COL_DATE]):
+                            full_df[C.COL_DATE] = pd.to_datetime(full_df[C.COL_DATE])
+                            
+                        # Reindex to full_df dates using map
+                        if not fitted_vals.empty:
+                            full_df['Pure_ARIMAX_Fitted'] = full_df[C.COL_DATE].map(fitted_vals)
+                     
+                     # Forecast (Test Phase)
+                     steps = len(test_data)
+                     if steps > 0:
+                         val_preds = validator_model.predict(steps, future_exog_df=test_data)
+                         if isinstance(val_preds, pd.Series):
+                            full_df['Pure_ARIMAX_Forecast'] = full_df[C.COL_DATE].map(val_preds)
                  except Exception as e:
-                     print(f"Error attaching fitted values: {e}")
-                 
+                     print(f"Error in Enhanced ARIMAX: {e}") 
+
+                 # 2. Traditional ARIMA (Baseline Comparison)
+                 try:
+                     baseline_model = TraditionalARIMA(drug_series)
+                     baseline_model.train(train_data)
+                     
+                     # Fitted Values
+                     if baseline_model.model_fit is not None:
+                        fitted_trad = baseline_model.model_fit.fittedvalues
+                        
+                        # Ensure 'Date' in full_df is proper datetime for mapping
+                        if not pd.api.types.is_datetime64_any_dtype(full_df[C.COL_DATE]):
+                            full_df[C.COL_DATE] = pd.to_datetime(full_df[C.COL_DATE])
+                            
+                        if not fitted_trad.empty:
+                            full_df['Traditional_ARIMA_Fitted'] = full_df[C.COL_DATE].map(fitted_trad)
+                     
+                     # Forecast
+                     steps = len(test_data)
+                     if steps > 0:
+                         trad_preds = baseline_model.predict(steps)
+                         if isinstance(trad_preds, pd.Series):
+                             full_df['Traditional_ARIMA_Forecast'] = full_df[C.COL_DATE].map(trad_preds)
+                 except Exception as e:
+                     print(f"Error in Traditional ARIMA: {e}")
+
         except Exception as e:
-            print(f"Pure ARIMAX Validation Failed: {e}")
-        
-        self._report_progress('complete', {'rows': len(full_df)})
+            print(f"Validation Pipeline Error: {e}")
+            
         return full_df
+                 

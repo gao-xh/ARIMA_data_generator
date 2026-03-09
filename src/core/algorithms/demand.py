@@ -1,6 +1,7 @@
 import pandas as pd
 from typing import Dict, Any, List
 import random
+import numpy as np
 from src.core.causal_impact import CausalImpact
 from src.core.simulation_config import SimulationConfig
 from src.core.thesis_params import ThesisParams
@@ -26,6 +27,10 @@ class DemandModel:
         # 3. Set Sensitivity Multipliers (Thesis Statistics Enforcement)
         # Using ThesisParams instead of hardcoding
         self._set_sensitivities()
+        
+        # 4. State for Correlated Noise (AR(1) Process)
+        # To make demand look more realistic and "organic", less like white noise
+        self.noise_state = 0.0
 
     def _get_functional_category(self, drug_info: Dict[str, Any]) -> str:
         cat_str = str(drug_info.get('药品品类', 'Unknown'))
@@ -83,8 +88,36 @@ class DemandModel:
         if hasattr(self, 'weekend_mult') and self.weekend_mult != 1.0:
              demand = CausalImpact.calculate_weekend_impact(demand, current_date, self.weekend_mult)
 
-        # Noise
-        eff_sigma = self.config.random_noise_sigma * self.noise_mult
-        demand = CausalImpact.apply_random_noise(demand, eff_sigma)
+        # 6. Apply Correlated Noise (AR(1) Process)
+        # Replaces simple white noise to reduce "high frequency jitter" and make it look more organic
+        
+        # Base Sigma
+        base_sigma = self.config.random_noise_sigma * self.noise_mult
+        
+        # AR(1) Parameter (Rho) - Controls smoothness/memory
+        # 0.0 = White Noise, 1.0 = Random Walk
+        # 0.6 is a good balance for daily sales "momentum"
+        rho = 0.6 
+        
+        # Generate new innovation (White Noise part)
+        # Use simple normal distribution
+        innovation = np.random.normal(0, base_sigma)
+        
+        # Update State: x_t = rho * x_{t-1} + sqrt(1 - rho^2) * epsilon_t
+        # This ensures the variance of the process remains equal to base_sigma^2
+        self.noise_state = rho * self.noise_state + np.sqrt(1 - rho**2) * innovation
+        
+        # Clamp state to avoid explosion (e.g. -50% to +80%)
+        curr_noise = max(-0.5, min(0.8, self.noise_state))
+        
+        # Apply Multiplicative Noise
+        demand *= (1 + curr_noise)
+        
+        # 7. Occasional "Burst" Events (Rare, independent of AR process)
+        # Simulate bulk orders or sudden local events
+        # Probability: 1% per day
+        if np.random.random() < 0.01:
+             burst = np.random.uniform(1.2, 1.5) # 20-50% spike
+             demand *= burst
         
         return max(0, demand)

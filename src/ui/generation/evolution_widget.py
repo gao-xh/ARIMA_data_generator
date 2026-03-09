@@ -309,6 +309,10 @@ class EvolutionWidget(QWidget):
         self.plot_arimax = PlotWidget()
         self.viz_tabs.addTab(self.plot_arimax, "Model Fit Overlay")
         
+        # Tab 6: Method Comparison (Enhanced vs Traditional) - NEW
+        self.plot_comparison = PlotWidget()
+        self.viz_tabs.addTab(self.plot_comparison, "Method Comparison")
+        
         viz_splitter.addWidget(self.viz_tabs)
         
         # Logs
@@ -520,7 +524,7 @@ class EvolutionWidget(QWidget):
             ax1.plot(dates, stock_opt, label='Evolution (Manual -> AI)', color='blue', linewidth=1.5)
             
             # Vertical Split Line
-            ax1.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=1.5, label='Experiment Start (Optimized)')
+            ax1.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=1.5, label='Test Period Start')
             
             drug_name = self.current_drug_info.get('药品名称', 'Target Drug')
             ax1.set_title(f'Evolution Simulation: Inventory Levels - {drug_name}')
@@ -555,7 +559,7 @@ class EvolutionWidget(QWidget):
             
             # Highlight AI Region
             # ax_inv.axvspan(split_date_ts, dates.max(), color='green', alpha=0.05, label='AI Active Region')
-            ax_inv.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=2, label='Experiment Start (Optimized)')
+            ax_inv.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=2, label='Test Period Start')
 
             ax_inv.set_title(f'Detailed Inventory: Before vs After - {self.current_drug_info.get("药品名称")}')
             ax_inv.set_ylabel('Stock Quantity')
@@ -658,41 +662,44 @@ class EvolutionWidget(QWidget):
             
             real_demand = df.get('Optimized_Demand', pd.Series(0, index=df.index))
             fit_vals = df.get('Pure_ARIMAX_Fitted', pd.Series(np.nan, index=df.index))
+            cast_vals = df.get('Pure_ARIMAX_Forecast', pd.Series(np.nan, index=df.index))
             
-            # --- Filter for Training Period Only ---
-            # User Request: Show only Training Set fit (approx 20 months)
-            mask_train = dates <= split_date_ts
+            # --- Visualization Logic: Training & Test Split ---
+            # 1. Real Demand (Ground Truth) - Plot Full History
+            ax_fit.plot(dates, real_demand, label='Real Demand (Ground Truth)', color='lightgray', alpha=0.6, linewidth=1.5)
             
-            # Apply Filter
-            dates_train = dates[mask_train]
-            demand_train = real_demand[mask_train]
-            fit_train = fit_vals[mask_train]
-            
-            # Plot Real Demand (Ground Truth) - Training Only
-            ax_fit.plot(dates_train, demand_train, label='Real Demand (Training)', color='lightgray', alpha=0.5, linewidth=1.0)
-            
-            # Plot 7-Day Moving Avg (Validation Basis) - Training Only
-            real_trend = demand_train.rolling(window=7, min_periods=1, center=True).mean()
-            ax_fit.plot(dates_train, real_trend, label='Real Trend (7d Avg)', color='green', alpha=0.8, linewidth=1.5, linestyle='-')
+            # 2. Real Trend (7-Day Moving Avg) - Smoother comparison line
+            real_trend = real_demand.rolling(window=7, min_periods=1, center=True).mean()
+            ax_fit.plot(dates, real_trend, label='Real Trend (7d Avg)', color='green', alpha=0.5, linewidth=1.0, linestyle='-')
 
-            # Plot Fitted Values (Training Phase) - Training Only
+            # 3. Fitted Values (Training Phase) - approx first 20 months
             # Only plot where not NaN (ARIMAX fitted values)
-            mask_fit = ~fit_train.isna()
+            mask_fit = ~fit_vals.isna()
             
             # Burn-in Truncation: Hide first 30 days to avoid initialization transients (Cold Start)
             if mask_fit.any():
-                # Find indices where fit exists within the training slice
+                # Find indices where fit exists
                 fit_indices = np.where(mask_fit)[0]
                 if len(fit_indices) > 30:
                     # Set mask to False for the first 30 valid points
                     mask_fit.iloc[fit_indices[:30]] = False
 
             if mask_fit.any():
-                ax_fit.plot(dates_train[mask_fit], fit_train[mask_fit], label='ARIMAX Fit (Training)', color='blue', linewidth=1.5, linestyle='-')
+                ax_fit.plot(dates[mask_fit], fit_vals[mask_fit], label='ARIMAX Fit (Training)', color='blue', linewidth=1.5, linestyle='-')
                 
-            # Note: Forecast (Test Phase) is NOT plotted here as requested
+            # 4. Forecast Values (Test Phase) - approx last 4 months
+            # Only plot where not NaN (ARIMAX forecast values)
+            mask_cast = ~cast_vals.isna()
+            # Filter out 0s if they were filled (just in case)
+            mask_cast = mask_cast & (cast_vals != 0)
             
-            ax_fit.set_title(f'Model Training Performance (20 Months) - {self.current_drug_info.get("药品名称")}')
+            if mask_cast.any():
+                ax_fit.plot(dates[mask_cast], cast_vals[mask_cast], label='ARIMAX Forecast (Test)', color='red', linewidth=2.0, linestyle='--')
+            
+            # 5. Split Line (Training / Test Boundary)
+            ax_fit.axvline(x=split_date_ts, color='black', linestyle=':', label='Train/Test Split', linewidth=1.0)
+            
+            ax_fit.set_title(f'Model Validation: Training Fit (20mo) vs Test Forecast (4mo) - {self.current_drug_info.get("药品名称")}')
             ax_fit.legend(loc='upper left')
             ax_fit.grid(True, alpha=0.3)
             try:
@@ -702,6 +709,65 @@ class EvolutionWidget(QWidget):
             
             fig_arimax.tight_layout()
             self.plot_arimax.canvas.draw()
+            
+            # --- 6. Method Comparison Tab (New) ---
+            # Compare Enhanced ARIMAX vs Traditional ARIMA vs Real Demand
+            fig_comp = self.plot_comparison.canvas.fig
+            fig_comp.clear()
+            ax_comp = fig_comp.add_subplot(111)
+            
+            
+            # --- Re-define Training Slice Variables for Comparison ---
+            mask_train = dates <= split_date_ts
+            dates_train = dates[mask_train]
+            demand_train = real_demand[mask_train]
+            fit_train = fit_vals[mask_train]
+
+            # Get data for comparison
+            # Need columns: 'Optimized_Demand', 'Pure_ARIMAX_Fitted', 'Traditional_ARIMA_Fitted'
+            trad_fit = df.get('Traditional_ARIMA_Fitted', pd.Series(np.nan, index=df.index))
+            # Just focus on the TRAINING part for comparison of fit quality
+            # Or the whole range? Let's show whole range of fit to see reaction.
+            
+            # 1. Real Demand (Background)
+            ax_comp.plot(dates_train, demand_train, label='Real Demand', color='lightgray', alpha=0.5, linewidth=1.0)
+            
+            # 2. Real Trend (7d Avg)
+            # Slice trend to match training dates
+            real_trend_train = real_trend[mask_train]
+            ax_comp.plot(dates_train, real_trend_train, label='Real Trend (7d Avg)', color='green', alpha=0.6, linewidth=1.5, linestyle='-')
+            
+            # 3. Enhanced ARIMAX Fit (Blue)
+            # Use mask_fit which already has burn-in removed, but slice it for training set
+            mask_fit_train_slice = mask_fit[mask_train]
+            if mask_fit_train_slice.any():
+                ax_comp.plot(dates_train[mask_fit_train_slice], fit_train[mask_fit_train_slice], label='Enhanced ARIMAX (Proposed)', color='blue', linewidth=1.5)
+                
+            # 4. Traditional ARIMA Fit (Orange/Dashey)
+            # Filter for Traditional Fit on Training set
+            trad_train = trad_fit[mask_train]
+            mask_trad = ~trad_train.isna()
+            
+            # Burn-in for Traditional too
+            if mask_trad.any():
+                idx_trad = np.where(mask_trad)[0]
+                if len(idx_trad) > 30:
+                     mask_trad.iloc[idx_trad[:30]] = False
+                     
+            if mask_trad.any():
+                ax_comp.plot(dates_train[mask_trad], trad_train[mask_trad], label='Traditional ARIMA (Baseline)', color='orange', linewidth=1.5, linestyle='--')
+
+            ax_comp.set_title(f'Method Comparison: Enhanced ARIMAX vs Traditional - {self.current_drug_info.get("药品名称")}')
+            ax_comp.legend(loc='upper right')
+            ax_comp.grid(True, alpha=0.3)
+            
+            try:
+                ax_comp.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                fig_comp.autofmt_xdate()
+            except: pass
+            
+            fig_comp.tight_layout()
+            self.plot_comparison.canvas.draw()
             
             # --- KPI Table ---
             # Updated to Compare 2024 Q4 (Baseline) vs 2025 Q4 (Optimized)
