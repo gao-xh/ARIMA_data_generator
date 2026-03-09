@@ -298,7 +298,8 @@ class MCMC_Transition:
                                  date_ts = pd.Timestamp(date)
                                  mask = self.external_data[C.COL_DATE] < date_ts
                                  exog_hist = self.external_data.loc[mask].copy()
-                                 
+                                 exog_hist = exog_hist.reset_index(drop=True)
+
                                  # Apply specific column renaming
                                  exog_hist = exog_hist.rename(columns=col_map)
                                  
@@ -315,6 +316,7 @@ class MCMC_Transition:
                                      # Get future exog and rename
                                      future_mask = self.external_data[C.COL_DATE].isin(future_dates)
                                      future_exog = self.external_data[future_mask].copy()
+                                     future_exog = future_exog.reset_index(drop=True)
                                      future_exog = future_exog.rename(columns=col_map)
                                      
                                      # Calculate min validity for validity decay (Nominal Fresh)
