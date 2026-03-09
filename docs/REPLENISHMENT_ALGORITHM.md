@@ -1,10 +1,19 @@
 # 补货策略算法详细文档 (Replenishment Strategy Algorithm)
 
-本文档详细记录了系统中实现的两种独立补货策略：**基准策略 (Baseline Strategy)** 与 **优化策略 (Optimized Strategy)**。这两种策略在平行模拟环境中运行，共享相同的外部环境（需求、天气、流感），以确保对比的公平性。
+本文档详细记录了系统支持的两种验证模式：**平行对照 (Parallel Mode)** 与 **演化模拟 (Evolutionary Mode)**，以及其中核心的补货策略算法。
 
----
+## 1. 验证模式与符号体系
 
-## 1. 符号定义 (Notation)
+### 1.1 双模态验证 (Duel Verification Modes)
+为全面评估算法效果，系统提供了两种仿真环境：
+1.  **平行对照 (Parallel Mode)**: 
+    - **逻辑**: 同时运行 Baseline 和 Optimized 两个独立进程，共享完全相同的随机种子 (Random Seed)。
+    - **作用**: 消除环境噪声干扰，直接对比同一情境下两种策略的优劣。对应系统界面的 **Benchmark Tab**。
+2.  **演化模拟 (Evolutionary Mode)**:
+    - **逻辑**: 在时间轴上顺序切换，2024年运行 Baseline 积累数据，2025年切换至 Optimized。
+    - **作用**: 模拟真实业务上线过程，验证冷启动效果。对应系统界面的 **Evolution Tab**。
+
+### 1.2 符号定义 (Notation)
 
 | 符号 | 含义 | 单位/说明 |
 | :--- | :--- | :--- |

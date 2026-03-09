@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
      QTextEdit, QProgressBar, QComboBox, QDoubleSpinBox, QSpinBox,
      QSplitter, QSizePolicy, QFormLayout, QTabWidget,
      QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
-     QDateEdit
+     QDateEdit, QCheckBox
 )
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, QThread, Signal, QDate
@@ -40,13 +40,14 @@ class EvolutionWorker(QThread):
     finished = Signal(pd.DataFrame)
     error = Signal(str)
     
-    def __init__(self, config: SimulationConfig, drug_info: dict, external_data: pd.DataFrame, duration_days: int, split_date: str):
+    def __init__(self, config: SimulationConfig, drug_info: dict, external_data: pd.DataFrame, duration_days: int, split_date: str, seed: int = None):
         super().__init__()
         self.config = config
         self.drug_info = drug_info
         self.external_data = external_data
         self.duration_days = duration_days
         self.split_date = split_date
+        self.seed = seed
         
     def run(self):
         try:
@@ -60,7 +61,8 @@ class EvolutionWorker(QThread):
             df = tuner.run_simulation_only(
                 total_days=self.duration_days,
                 evolution_mode=True,
-                split_date=self.split_date
+                split_date=self.split_date,
+                seed_value=self.seed
             )
             self.finished.emit(df)
             
@@ -213,6 +215,23 @@ class EvolutionWidget(QWidget):
         env_layout.addRow("Flu Sensitivity:", self.spin_flu_sens)
         env_layout.addRow("Temp Sensitivity:", self.spin_temp_sens)
         env_layout.addRow("Rain Sensitivity:", self.spin_rain_sens)
+        
+        # Random Seed Control
+        seed_layout = QHBoxLayout()
+        self.chk_random_seed = QCheckBox("Random Seed")
+        self.chk_random_seed.setChecked(True)
+        self.chk_random_seed.stateChanged.connect(self._on_random_chk_changed)
+        
+        self.spin_seed = QSpinBox()
+        self.spin_seed.setRange(0, 999999)
+        self.spin_seed.setValue(42)
+        self.spin_seed.setEnabled(False) # Default disabled because random is checked
+        self.spin_seed.setToolTip("Fixed seed for reproducibility")
+        
+        seed_layout.addWidget(self.chk_random_seed)
+        seed_layout.addWidget(self.spin_seed)
+        env_layout.addRow("Seed Control:", seed_layout)
+
         env_group.setLayout(env_layout)
 
         control_layout.addWidget(env_group)
@@ -288,7 +307,7 @@ class EvolutionWidget(QWidget):
         
         viz_splitter.addWidget(log_group)
         
-        # Set initial stretch factors
+        # Set initial stretch factors for Viz Splitter
         viz_splitter.setStretchFactor(0, 1)
         viz_splitter.setStretchFactor(1, 10)
         viz_splitter.setStretchFactor(2, 2)
@@ -301,6 +320,9 @@ class EvolutionWidget(QWidget):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 7)
 
+    def _on_random_chk_changed(self, state):
+        self.spin_seed.setEnabled(state != 2) # If checked (2), disabled. If unchecked (0), enabled.
+
     def _reset_params(self):
         self.spin_initial_stock.setValue(14)
         self.spin_replenish.setValue(30)
@@ -309,6 +331,7 @@ class EvolutionWidget(QWidget):
         self.spin_temp_sens.setValue(1.0)
         self.spin_rain_sens.setValue(0.0)
         self.date_split.setDate(QDate(2025, 9, 1))
+        self.chk_random_seed.setChecked(True)
         self.log_console.append("Parameters reset.")
 
     def log(self, msg):
@@ -408,20 +431,30 @@ class EvolutionWidget(QWidget):
         except:
              config.validity_days = 365
 
+        # Store for dashboard use
+        self.current_drug_info = drug_info
+        
         drug_info['有效期'] = config.validity_days
         drug_info['补货提前期'] = 3 # Fixed for now or add control if needed, existing widget has it
         drug_info['药品ID'] = str(row.get('药品编号', f'DRUG_{idx}'))
         drug_info['药品名称'] = str(row.get('药品名称', 'Unknown'))
         drug_info['单价'] = float(row.get('零售价', 35.0))
         drug_info['药品品类'] = str(row.get('药品品类', 'Misc'))
-        drug_info['波动区间分类'] = str(row.get('波动区间分类', '中波动'))
         
-        self.btn_run.setEnabled(False)
-        self.btn_run.setText("Running...")
+        # Determine Seed
+        final_seed = None
+        if not self.chk_random_seed.isChecked():
+            final_seed = self.spin_seed.value()
+        else:
+            final_seed = np.random.randint(0, 100000)
+            self.spin_seed.blockSignals(True)
+            self.spin_seed.setValue(final_seed) # Show the random seed used
+            self.spin_seed.blockSignals(False)
+
         self.log_console.append(f"Starting Evolution Simulation for {drug_info['药品名称']}...")
-        self.log_console.append(f"Split Date: {split_date_str}")
+        self.log_console.append(f"Split Date: {split_date_str} | Seed: {final_seed}")
         
-        self.worker = EvolutionWorker(config, drug_info, self.ext_df, duration, split_date_str)
+        self.worker = EvolutionWorker(config, drug_info, self.ext_df, duration, split_date_str, seed=final_seed)
         self.worker.finished.connect(self.on_simulation_finished)
         self.worker.error.connect(self.on_simulation_error)
         self.worker.start()
@@ -442,6 +475,8 @@ class EvolutionWidget(QWidget):
             if '日期' in df.columns or 'date' in df.columns:
                  col_date = '日期' if '日期' in df.columns else 'date'
                  dates = pd.to_datetime(df[col_date])
+                 # FIX: Set index to DatetimeIndex for slicing by date string
+                 df = df.set_index(dates) 
             else:
                  return
 
@@ -517,23 +552,119 @@ class EvolutionWidget(QWidget):
             self.plot_inventory.canvas.draw()
             
             # --- KPI Table ---
-            # Calculate metrics
+            # Updated to Compare 2024 Q4 (Baseline) vs 2025 Q4 (Optimized)
             self.kpi_table.setRowCount(0)
+            self.kpi_table.setHorizontalHeaderLabels([
+                "Metric", 
+                "2024 Q4 (Baseline)", 
+                "2025 Q4 (Optimized)", 
+                "Change"
+            ])
             
-            # 1. Total Sales
-            total_sales_base = sales_base.sum()
-            total_sales_opt = sales_opt.sum()
-            self._add_kpi_row("Total Sales (Units)", f"{total_sales_base:,.0f}", f"{total_sales_opt:,.0f}", total_sales_opt - total_sales_base)
+            # Helper to filter dates
+            def get_period_stats(df_full, start_date, end_date, prefix='Baseline'):
+                mask = (df_full.index >= start_date) & (df_full.index <= end_date)
+                sub_df = df_full.loc[mask]
+                
+                if sub_df.empty: return None
+                
+                # Extract Columns
+                sales = sub_df.get(f'{prefix}_Sales', pd.Series(0, index=sub_df.index))
+                inv = sub_df.get(f'{prefix}_Inventory', pd.Series(0, index=sub_df.index))
+                loss = sub_df.get(f'{prefix}_Loss', pd.Series(0, index=sub_df.index))
+                stockout_flag = sub_df.get(f'{prefix}_Stockout_Flag', pd.Series(0, index=sub_df.index))
+                
+                # 1. Total Sales
+                total_sales = sales.sum()
+                
+                # 2. Loss Rate
+                total_loss = loss.sum()
+                loss_rate = (total_loss / (total_sales + total_loss + 1e-6)) * 100
+                
+                # 3. Stockout Rate
+                stockout_days = (stockout_flag > 0).sum()
+                stockout_rate = (stockout_days / len(sub_df)) * 100
+                
+                # 4. Turnover Days (Avg Inv / Avg Daily Sales)
+                avg_inv = inv.mean()
+                avg_sales = sales.mean()
+                turnover = avg_inv / (avg_sales + 1e-6)
+                
+                # 5. Funds Occupied
+                unit_price = self.current_drug_info.get('单价', 35.0)
+                funds = avg_inv * unit_price
+                
+                # 6. Backlog Rate (Here using Avg Inventory Level as proxy for backlog/overstock pressure)
+                # Or defined as: Inventory / (Daily Demand * Validity)? Let's use Normalized Inventory
+                backlog_rate = avg_inv # Display as raw quantity for now
+                
+                # 7. MAPE (If available)
+                mape = 0.0
+                if f'{prefix}_Forecast' in sub_df.columns:
+                    y_true = sales.values
+                    y_pred = sub_df[f'{prefix}_Forecast'].values
+                    # specific mape calculation ignoring zeros
+                    mask_nz = y_true > 0.1
+                    if mask_nz.any():
+                        mape = np.mean(np.abs((y_true[mask_nz] - y_pred[mask_nz]) / y_true[mask_nz])) * 100
+                
+                return {
+                    'loss_rate': loss_rate,
+                    'stockout_rate': stockout_rate,
+                    'turnover': turnover,
+                    'funds': funds,
+                    'backlog': backlog_rate,
+                    'mape': mape
+                }
             
-            # 2. Total Stockouts
-            total_out_base = stockout_base_flag.sum()
-            total_out_opt = stockout_opt_flag.sum()
-            self._add_kpi_row("Stockout Days", f"{total_out_base}", f"{total_out_opt}", total_out_base - total_out_opt, inverse=True)
+            # Define Periods
+            # 2024 Sep-Dec (Baseline)
+            stats_24 = get_period_stats(df, '2024-09-01', '2024-12-31', 'Baseline')
+            # 2025 Sep-Dec (Optimized)
+            stats_25 = get_period_stats(df, '2025-09-01', '2025-12-31', 'Optimized')
             
-            # 3. Avg Inventory
-            avg_inv_base = stock_base.mean()
-            avg_inv_opt = stock_opt.mean()
-            self._add_kpi_row("Avg Inventory", f"{avg_inv_base:.1f}", f"{avg_inv_opt:.1f}", avg_inv_base - avg_inv_opt, inverse=True)
+            if stats_24 and stats_25:
+                # 1. Loss Rate
+                self._add_kpi_row("Loss Rate (损耗率)", 
+                                  f"{stats_24['loss_rate']:.2f}%", 
+                                  f"{stats_25['loss_rate']:.2f}%", 
+                                  stats_25['loss_rate'] - stats_24['loss_rate'], inverse=True)
+                
+                # 2. Stockout Rate
+                self._add_kpi_row("Stockout Rate (缺货率)", 
+                                  f"{stats_24['stockout_rate']:.2f}%", 
+                                  f"{stats_25['stockout_rate']:.2f}%", 
+                                  stats_25['stockout_rate'] - stats_24['stockout_rate'], inverse=True)
+                
+                # 3. Backlog Rate (积压率 - using Avg Inv)
+                # Displaying as Avg Units for clarity, or rename if ratio strictly needed
+                self._add_kpi_row("Backlog/Avg Inv (积压)", 
+                                  f"{stats_24['backlog']:.1f}", 
+                                  f"{stats_25['backlog']:.1f}", 
+                                  stats_25['backlog'] - stats_24['backlog'], inverse=True)
+
+                # 4. Turnover Days
+                self._add_kpi_row("Turnover Days (周转)", 
+                                  f"{stats_24['turnover']:.1f} d", 
+                                  f"{stats_25['turnover']:.1f} d", 
+                                  stats_25['turnover'] - stats_24['turnover'], inverse=True)
+                
+                # 5. Funds Occupied
+                self._add_kpi_row("Funds Occupied (资金)", 
+                                  f"¥{stats_24['funds']:,.0f}", 
+                                  f"¥{stats_25['funds']:,.0f}", 
+                                  stats_25['funds'] - stats_24['funds'], inverse=True)
+                
+                # 6. Model MAPE (Only valid if Forecast exists)
+                # Lower MAPE is better
+                self._add_kpi_row("Model MAPE (预测误差)", 
+                                  f"{stats_24['mape']:.1f}%", 
+                                  f"{stats_25['mape']:.1f}%", 
+                                  stats_25['mape'] - stats_24['mape'], inverse=True)
+            else:
+                self.kpi_table.setRowCount(0)
+                item = QTableWidgetItem("Insufficient Data for Q4 Comparison")
+                self.kpi_table.setItem(0, 0, item)
             
         except Exception as e:
             self.log_console.append(f"Visualization Error: {e}")

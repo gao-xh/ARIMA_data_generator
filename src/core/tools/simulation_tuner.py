@@ -59,7 +59,7 @@ class SimulationTuner:
             }
             self.progress_callback(payload)
 
-    def run_simulation_only(self, total_days=730, evolution_mode=False, split_date=None) -> pd.DataFrame:
+    def run_simulation_only(self, total_days=730, evolution_mode=False, split_date=None, seed_value=None) -> pd.DataFrame:
         """
         Run side-by-side simulation: Baseline (A) vs Optimized (B).
         Returns a Combined Wide-Format DataFrame for direct comparison.
@@ -71,9 +71,12 @@ class SimulationTuner:
         """
         self._report_progress('start', {'total_days': total_days, 'drug_id': self.drug_info.get('药品ID')})
         
-        # Fixed Seed for Reproducibility across scenarios
-        # Ensures that Demand (Sales) is identical for fair comparison
-        seed_value = 42
+        # dynamic Seed for Variety but maintain Reproducibility across scenarios
+        # Ensures that Demand (Sales) is identical for fair comparison between A and B
+        if seed_value is None:
+            seed_value = random.randint(0, 10000)
+            
+        print(f"Simulation Random Seed: {seed_value}")
         
         # --- Scenario A: Baseline (Empirical/Counterfactual) ---
         # In both modes, Scenario A is "What if we NEVER optimize?" (Pure Baseline)
