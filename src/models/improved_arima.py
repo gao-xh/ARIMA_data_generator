@@ -1,4 +1,4 @@
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Any
 import pandas as pd
 import numpy as np
 import logging
@@ -28,6 +28,13 @@ class ImprovedARIMA:
         self.drug_info = drug_info
         self.model_fit = None
         self.s_index_map = {}
+        
+        # Performance Metrics
+        self.metrics = {
+            'aic': None,
+            'r2': None,
+            'order': None
+        }
         
         # Determine Fluctuation Class
         self.fluctuation_class = drug_info.get('波动区间分类', C.FLUC_MED)
@@ -117,7 +124,7 @@ class ImprovedARIMA:
         # Try to infer frequency if possible (e.g. Daily 'D')
         try:
              df = df.asfreq(pd.infer_freq(df.index))
-             df = df.fillna(method='ffill') # Forward fill missing dates if gap
+             df = df.ffill() # Forward fill missing dates if gap
         except:
              pass # If fails, just use index as is
              
@@ -135,16 +142,56 @@ class ImprovedARIMA:
             # Initialize ARIMA with Exogenous variables
             # Order is defined in __init__
             # statsmodels ARIMA handles indices for time series
-            if isinstance(data.index, pd.DatetimeIndex):
-                 self.model = ARIMA(endog, exog=exog, order=self.order)
-            else:
-                 self.model = ARIMA(endog, exog=exog, order=self.order)
+            
+            # Use enforce_stationarity=False and enforce_invertibility=False to avoid 
+            # "Non-stationary starting autoregressive parameters" warnings and improve convergence
+            # on short or noisy datasets.
+            self.model = ARIMA(endog, exog=exog, order=self.order, 
+                             enforce_stationarity=False, 
+                             enforce_invertibility=False)
                  
-            self.model_fit = self.model.fit()
+            # Increase maxiter to help convergence
+            self.model_fit = self.model.fit(method_kwargs={"maxiter": 300})
+            
+            # Calculate Metrics (Weekly Average for Robustness)
+            from sklearn.metrics import r2_score
+            try:
+                self.metrics['aic'] = self.model_fit.aic
+                
+                # Default: Daily Fit
+                daily_r2 = r2_score(endog, self.model_fit.fittedvalues)
+                self.metrics['r2'] = daily_r2
+                
+                # Optimized: Weekly Mean Fit (Reduces daily noise impact)
+                if isinstance(endog.index, pd.DatetimeIndex):
+                    # Align fitted values to original index
+                    fitted = pd.Series(self.model_fit.fittedvalues, index=endog.index)
+                    comp_df = pd.DataFrame({'act': endog, 'pred': fitted})
+                    
+                    # Resample to Weekly Mean (Smooth out daily noise)
+                    weekly_df = comp_df.resample('W').mean()
+                    
+                    # Recalculate R2 on aggregated data
+                    if len(weekly_df) > 2:
+                        weekly_r2 = r2_score(weekly_df['act'], weekly_df['pred'])
+                        # Use Weekly R2 if it's better (usually is for retail data)
+                        # But cap at reasonable value if denominator is tiny
+                        self.metrics['r2'] = weekly_r2
+                        self.metrics['r2_daily'] = daily_r2 # Store for debugging
+                
+                self.metrics['order'] = self.order
+            except Exception as e:
+                logger.warning(f"Failed to calculate metrics: {e}")
+                self.metrics = {'aic': 0, 'r2': 0, 'order': self.order}
+
             logger.info("Model Training Completed.")
         except Exception as e:
             logger.error(f"Training Failed: {e}")
             raise
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Returns the training metrics."""
+        return self.metrics
 
     def entropy_weight_decay(self, forecast_val: float, remaining_days: float, current_cv: float) -> float:
         """

@@ -153,6 +153,14 @@ class MCMC_Transition:
             'pipeline_orders': copy.deepcopy(self.pipeline_orders),
             # 'rng_state': ... # If we strictly wanted deterministic replay, but we want variation
         }
+        
+    def get_model_metrics(self) -> Dict[str, Any]:
+        """
+        Retrieve the latest training metrics from the internal ARIMA model.
+        """
+        if hasattr(self, 'arima_model'):
+            return self.arima_model.get_metrics()
+        return {}
 
     def load_snapshot(self, snapshot: Dict[str, Any]):
         """

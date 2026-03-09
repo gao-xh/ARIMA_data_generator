@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, QThread, Signal, QDate
 from statsmodels.tsa.arima.model import ARIMA
-from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
+from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error, r2_score
 
 # Matplotlib Integration
 try:
@@ -299,7 +299,15 @@ class EvolutionWidget(QWidget):
         
         # Tab 3: Sales Analysis
         self.plot_sales = PlotWidget()
-        self.viz_tabs.addTab(self.plot_sales, "Sales Analysis") # Same sales
+        self.viz_tabs.addTab(self.plot_sales, "Sales Analysis (Full)")
+        
+        # Tab 4: 2024 Zoom (Baseline)
+        self.plot_sales_2024 = PlotWidget()
+        self.viz_tabs.addTab(self.plot_sales_2024, "Sales Analysis (2024)")
+        
+        # Tab 5: ARIMAX Fit Overlay
+        self.plot_arimax = PlotWidget()
+        self.viz_tabs.addTab(self.plot_arimax, "Model Fit Overlay")
         
         viz_splitter.addWidget(self.viz_tabs)
         
@@ -603,6 +611,98 @@ class EvolutionWidget(QWidget):
             fig_sales.tight_layout()
             self.plot_sales.canvas.draw()
             
+            # --- 4. Sales Analysis (2024 Zoom) Tab ---
+            fig_sales_24 = self.plot_sales_2024.canvas.fig
+            fig_sales_24.clear()
+            
+            ax_s24 = fig_sales_24.add_subplot(111)
+            
+            # Filter Data for 2024
+            mask_24 = (dates >= pd.Timestamp('2024-01-01')) & (dates < pd.Timestamp('2025-01-01'))
+            dates_24 = dates[mask_24]
+            sales_24 = df.loc[mask_24, 'Baseline_Sales'] # Use Baseline for 2024
+            
+            if not dates_24.empty:
+                # Actual Sales
+                ax_s24.plot(dates_24, sales_24, label='Baseline Sales (2024)', color='blue', alpha=0.6, linewidth=1)
+                
+                # Trend
+                trend_24 = sales_24.rolling(window=7, min_periods=1, center=True).mean()
+                ax_s24.plot(dates_24, trend_24, label='Trend (7d Avg)', color='orange', linewidth=2)
+                
+                # Stockouts (Baseline)
+                stockout_24 = df.loc[mask_24, 'Baseline_Stockout_Flag']
+                so_dates_24 = dates_24[stockout_24 > 0]
+                if not so_dates_24.empty:
+                    ax_s24.scatter(so_dates_24, [0]*len(so_dates_24), color='red', marker='x', s=60, label='Stockout', zorder=5)
+
+                ax_s24.set_title(f'Baseline Performance: 2024 Full Year - {self.current_drug_info.get("药品名称")}')
+                ax_s24.legend()
+                ax_s24.grid(True, alpha=0.3)
+                try:
+                    ax_s24.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                    fig_sales_24.autofmt_xdate()
+                except: pass
+            
+            fig_sales_24.tight_layout()
+            self.plot_sales_2024.canvas.draw()
+            
+            # --- 5. ARIMAX Fit Overlay Tab ---
+            fig_arimax = self.plot_arimax.canvas.fig
+            fig_arimax.clear()
+            
+            ax_fit = fig_arimax.add_subplot(111)
+            
+            # Data from SimulationTuner (Pure ARIMAX columns)
+            # Need columns: 'Optimized_Demand' (Real), 'Pure_ARIMAX_Fitted', 'Pure_ARIMAX_Forecast'
+            
+            real_demand = df.get('Optimized_Demand', pd.Series(0, index=df.index))
+            fit_vals = df.get('Pure_ARIMAX_Fitted', pd.Series(np.nan, index=df.index))
+            
+            # --- Filter for Training Period Only ---
+            # User Request: Show only Training Set fit (approx 20 months)
+            mask_train = dates <= split_date_ts
+            
+            # Apply Filter
+            dates_train = dates[mask_train]
+            demand_train = real_demand[mask_train]
+            fit_train = fit_vals[mask_train]
+            
+            # Plot Real Demand (Ground Truth) - Training Only
+            ax_fit.plot(dates_train, demand_train, label='Real Demand (Training)', color='lightgray', alpha=0.5, linewidth=1.0)
+            
+            # Plot 7-Day Moving Avg (Validation Basis) - Training Only
+            real_trend = demand_train.rolling(window=7, min_periods=1, center=True).mean()
+            ax_fit.plot(dates_train, real_trend, label='Real Trend (7d Avg)', color='green', alpha=0.8, linewidth=1.5, linestyle='-')
+
+            # Plot Fitted Values (Training Phase) - Training Only
+            # Only plot where not NaN (ARIMAX fitted values)
+            mask_fit = ~fit_train.isna()
+            
+            # Burn-in Truncation: Hide first 30 days to avoid initialization transients (Cold Start)
+            if mask_fit.any():
+                # Find indices where fit exists within the training slice
+                fit_indices = np.where(mask_fit)[0]
+                if len(fit_indices) > 30:
+                    # Set mask to False for the first 30 valid points
+                    mask_fit.iloc[fit_indices[:30]] = False
+
+            if mask_fit.any():
+                ax_fit.plot(dates_train[mask_fit], fit_train[mask_fit], label='ARIMAX Fit (Training)', color='blue', linewidth=1.5, linestyle='-')
+                
+            # Note: Forecast (Test Phase) is NOT plotted here as requested
+            
+            ax_fit.set_title(f'Model Training Performance (20 Months) - {self.current_drug_info.get("药品名称")}')
+            ax_fit.legend(loc='upper left')
+            ax_fit.grid(True, alpha=0.3)
+            try:
+                ax_fit.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                fig_arimax.autofmt_xdate()
+            except: pass
+            
+            fig_arimax.tight_layout()
+            self.plot_arimax.canvas.draw()
+            
             # --- KPI Table ---
             # Updated to Compare 2024 Q4 (Baseline) vs 2025 Q4 (Optimized)
             self.kpi_table.setRowCount(0)
@@ -652,13 +752,31 @@ class EvolutionWidget(QWidget):
                 
                 # 7. MAPE (If available)
                 mape = 0.0
+                r2 = -999.0
+                rmse = -1.0
+                
                 if f'{prefix}_Forecast' in sub_df.columns:
-                    y_true = sales.values
+                    # Ensure we use Demand as Ground Truth, not Sales
+                    y_true = sub_df[f'{prefix}_Demand'].values
                     y_pred = sub_df[f'{prefix}_Forecast'].values
-                    # specific mape calculation ignoring zeros
+                    
+                    # Filter for non-zero demand to avoid div-by-zero in MAPE, 
+                    # but R2/RMSE should use all points ideally. 
+                    # For MAPE:
                     mask_nz = y_true > 0.1
                     if mask_nz.any():
                         mape = np.mean(np.abs((y_true[mask_nz] - y_pred[mask_nz]) / y_true[mask_nz])) * 100
+                        
+                    # For R2/RMSE (Use all valid points)
+                    try:
+                        # R2 can be computed even if y_true is constant (will be 0 or neg)
+                        # Ensure no NaNs
+                        mask_valid = ~np.isnan(y_true) & ~np.isnan(y_pred)
+                        if mask_valid.any():
+                            r2 = r2_score(y_true[mask_valid], y_pred[mask_valid])
+                            rmse = np.sqrt(mean_squared_error(y_true[mask_valid], y_pred[mask_valid]))
+                    except Exception:
+                        pass
                 
                 return {
                     'loss_rate': loss_rate,
@@ -666,7 +784,9 @@ class EvolutionWidget(QWidget):
                     'turnover': turnover,
                     'funds': funds,
                     'backlog': backlog_rate,
-                    'mape': mape
+                    'mape': mape,
+                    'r2': r2,
+                    'rmse': rmse
                 }
             
             # Define Periods
@@ -713,9 +833,68 @@ class EvolutionWidget(QWidget):
                                   f"{stats_24['mape']:.1f}%", 
                                   f"{stats_25['mape']:.1f}%", 
                                   stats_25['mape'] - stats_24['mape'], inverse=True)
+                
+                # 7. Model Fit on Test Data (Prediction vs Actual)
+                metrics = getattr(df, 'attrs', {}).get('model_metrics', {})
+                
+                # Preferred: Use "Pure" Test Metrics if available (calculated out of loop)
+                r2_test = metrics.get('r2_test', -999.0)
+                rmse_test = metrics.get('rmse_test', -1.0)
+                
+                # Fallback: Use Simulation DataFrame columns (Optimized Forecast)
+                # But stats_25 dictionary already contains R2/RMSE computed from period data
+                if r2_test == -999.0:
+                    r2_test = stats_25.get('r2', -999.0) 
+                if rmse_test == -1.0:
+                    rmse_test = stats_25.get('rmse', -1.0)
+
+
+                self._add_kpi_row("Forecast R² (测试集拟合)",
+                                  "N/A", # Baseline doesn't have Forecast
+                                  f"{r2_test:.3f}" if r2_test != -999.0 else "N/A",
+                                  0, 
+                                  inverse=False)
+                                  
+                self._add_kpi_row("Forecast RMSE (均方根误差)",
+                                  "N/A",
+                                  f"{rmse_test:.2f}" if rmse_test != -1.0 else "N/A",
+                                  0, 
+                                  inverse=True)
+
+                # 8. Model Diagnostics (Using stored metrics - Training Fit)
+                if metrics:
+                    # R2 (Training) - Show in FIRST column (Baseline/Training History)
+                    r2_train = metrics.get('r2_train', metrics.get('r2', 0))
+                    if r2_train is None: r2_train = 0
+                    self._add_kpi_row("Train R² (训练集拟合)", 
+                                      f"{r2_train:.3f}", 
+                                      "N/A", 
+                                      0, 
+                                      inverse=False)
+
+                    # AIC - Show in FIRST column
+                    aic_val = metrics.get('aic', 0)
+                    if aic_val is None: aic_val = 0
+                    self._add_kpi_row("Model AIC (信息准则)", 
+                                      f"{aic_val:.1f}", 
+                                      "N/A", 
+                                      0, 
+                                      inverse=True) 
+                    
+                    # Order - Show in FIRST column
+                    order = metrics.get('order', None)
+                    if order:
+                        row = self.kpi_table.rowCount()
+                        self.kpi_table.insertRow(row)
+                        self.kpi_table.setItem(row, 0, QTableWidgetItem("Best Params (p,d,q)"))
+                        self.kpi_table.setItem(row, 1, QTableWidgetItem(str(order))) # Put in Manual Column
+                        self.kpi_table.setItem(row, 2, QTableWidgetItem("N/A"))
+                        self.kpi_table.setItem(row, 3, QTableWidgetItem(""))
+
             else:
                 self.kpi_table.setRowCount(0)
                 item = QTableWidgetItem("Insufficient Data for Q4 Comparison")
+
                 self.kpi_table.setItem(0, 0, item)
             
         except Exception as e:
