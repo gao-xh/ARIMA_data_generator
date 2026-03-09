@@ -8,8 +8,10 @@ from PySide6.QtWidgets import (
      QWidget, QVBoxLayout, QHBoxLayout, 
      QGroupBox, QPushButton, QLabel, 
      QTextEdit, QProgressBar, QComboBox, QDoubleSpinBox, QSpinBox,
-     QSplitter, QSizePolicy, QFormLayout, QTabWidget
+     QSplitter, QSizePolicy, QFormLayout, QTabWidget,
+     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea
 )
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, QThread, Signal
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
@@ -28,6 +30,7 @@ from src.core.tools.simulation_tuner import SimulationTuner
 from src.core.simulation_config import SimulationConfig
 from src.config import DRUG_INFO, EXTERNAL_FACTORS_FILE
 from src.core import constants as C # Import constants
+from src.ui.common.widgets import PlotWidget
 
 class SimulationWorker(QThread):
     """
@@ -59,15 +62,6 @@ class SimulationWorker(QThread):
             err_msg = f"Simulation Failed: {str(e)}\n{traceback.format_exc()}"
             self.error.emit(err_msg)
 
-class MplCanvas(FigureCanvas):
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
-        self.axes = self.fig.add_subplot(111)
-        super().__init__(self.fig)
-        self.setParent(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.updateGeometry()
-
 class GenerationWidget(QWidget):
     """
     Enhanced Simulation UI with Parameter Control and Visualization.
@@ -87,12 +81,10 @@ class GenerationWidget(QWidget):
                 # Ensure date parsing
                 date_col = next((c for c in self.ext_df.columns if 'date' in c.lower() or '日期' in c), None)
                 if date_col:
-                    # Rename to standard constant if needed
                     if date_col != C.COL_DATE:
                         self.ext_df = self.ext_df.rename(columns={date_col: C.COL_DATE})
                     
                     self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE])
-                    # Set Index for fast lookup in Tuner/MCMC
                     self.ext_df = self.ext_df.set_index(C.COL_DATE, drop=False)
             else:
                 # Mock External Data if missing
@@ -108,35 +100,41 @@ class GenerationWidget(QWidget):
 
     def _init_ui(self):
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- Left Panel: Controls ---
-        control_panel = QGroupBox("Configuration")
-        control_layout = QVBoxLayout()
+        # Splitter to allow resizing
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter)
+
+        # --- Left Panel: Controls (in ScrollArea) ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        control_panel = QWidget()
+        control_layout = QVBoxLayout(control_panel)
         control_layout.setSpacing(10)
+        control_layout.setContentsMargins(10, 10, 10, 10)
         
         # 0. Study Context
-        context_group = QGroupBox("Research Object (Thesis Context)")
+        context_group = QGroupBox("Research Object")
         context_layout = QVBoxLayout()
         
         info_label = QLabel(
-            "<b>Managed Clinics:</b> 7 Total (Abstracted as Single Entity)<br>"
-            "<b>Date Range:</b> 2023-01-01 to 2024-12-31 (Fixed)<br>"
-            "<b>Included Drugs:</b> 128 SKUs (Categorized)"
+            "<b>Managed Clinics:</b> 7 Total (Abstracted)<br>"
+            "<b>Date Range:</b> 2023-01-01 to 2024-12-31<br>"
         )
         info_label.setStyleSheet("color: #555; font-size: 11px;")
         context_layout.addWidget(info_label)
         
-        # Volatility Classification Legend
         legend_layout = QFormLayout()
-        legend_layout.setContentsMargins(0, 5, 0, 0)
         
         lbl_low = QLabel("Low (CV < 0.2):")
         lbl_low.setStyleSheet("color: green; font-weight: bold;")
         self.val_low = QLabel("41 SKUs")
         
-        lbl_med = QLabel("Medium (0.2 ≤ CV ≤ 0.5):")
+        lbl_med = QLabel("Medium (0.2-0.5):")
         lbl_med.setStyleSheet("color: orange; font-weight: bold;")
         self.val_med = QLabel("63 SKUs")
         
@@ -162,39 +160,35 @@ class GenerationWidget(QWidget):
         drug_group.setLayout(drug_layout)
         control_layout.addWidget(drug_group)
         
-        # 2. Inventory Policy (Control) Group
-        policy_group = QGroupBox("Inventory Policy (H2 - Strategy)")
+        # 2. Inventory Policy
+        policy_group = QGroupBox("Inventory Policy")
         policy_layout = QFormLayout()
         policy_layout.setSpacing(8)
 
         self.spin_initial_stock = QSpinBox()
-        self.spin_initial_stock.setRange(0, 90)
+        self.spin_initial_stock.setRange(0, 9999) # Relaxed limit
         self.spin_initial_stock.setValue(14)
         self.spin_initial_stock.setSuffix(" Days")
-        self.spin_initial_stock.setToolTip("Initial Inventory Level (Days of Demand)")
 
         self.spin_replenish = QSpinBox()
-        self.spin_replenish.setRange(1, 90)
+        self.spin_replenish.setRange(1, 365) # Relaxed limit
         self.spin_replenish.setValue(30)
         self.spin_replenish.setSuffix(" Days")
-        self.spin_replenish.setToolTip("Replenishment Cycle (Review Period R)")
 
         self.spin_lead_time = QSpinBox()
-        self.spin_lead_time.setRange(0, 30)
+        self.spin_lead_time.setRange(0, 100) # Relaxed limit
         self.spin_lead_time.setValue(3)
         self.spin_lead_time.setSuffix(" Days")
-        self.spin_lead_time.setToolTip("Lead Time (Delivery Delay L)")
         
         self.combo_service_level = QComboBox()
-        self.combo_service_level.addItems(["95% (Low Vol / Z=1.65)", "98% (Medium Vol / Z=1.96)", "99% (High Vol / Z=2.33)", "Custom"])
+        self.combo_service_level.addItems(["95% (Low Vol)", "98% (Med Vol)", "99% (High Vol)", "Custom"])
         self.combo_service_level.currentIndexChanged.connect(self._on_service_level_changed)
         
         self.spin_safety = QDoubleSpinBox()
-        self.spin_safety.setRange(0.5, 5.0)
+        self.spin_safety.setRange(0.1, 10.0) # Relaxed limit
         self.spin_safety.setSingleStep(0.1)
         self.spin_safety.setValue(1.96)
-        self.spin_safety.setToolTip("Safety Stock Factor (Z-Score)")
-        self.spin_safety.setEnabled(False) # Default to auto/locked unless Custom
+        self.spin_safety.setEnabled(False)
 
         policy_layout.addRow("Initial Stock:", self.spin_initial_stock)
         policy_layout.addRow("Review Period (R):", self.spin_replenish)
@@ -205,28 +199,25 @@ class GenerationWidget(QWidget):
         
         control_layout.addWidget(policy_group)
 
-        # 3. External Factors (Environment) Group
-        env_group = QGroupBox("Environment Factors (H1 - ARIMAX)")
+        # 3. Environment Factors
+        env_group = QGroupBox("Environment Factors")
         env_layout = QFormLayout()
         env_layout.setSpacing(8)
 
         self.spin_flu_sens = QDoubleSpinBox()
-        self.spin_flu_sens.setRange(0.0, 5.0)
+        self.spin_flu_sens.setRange(0.0, 10.0) # Relaxed limit
         self.spin_flu_sens.setSingleStep(0.1)
         self.spin_flu_sens.setValue(1.2)
-        self.spin_flu_sens.setToolTip("Sensitivity to Flu Outbreaks (Logic: D = Base * FluFactor * Sens)")
 
         self.spin_temp_sens = QDoubleSpinBox()
-        self.spin_temp_sens.setRange(0.0, 3.0)
+        self.spin_temp_sens.setRange(0.0, 10.0) # Relaxed limit
         self.spin_temp_sens.setSingleStep(0.1) 
         self.spin_temp_sens.setValue(1.0)
-        self.spin_temp_sens.setToolTip("Sensitivity to Cold Weather (Respiratory/Chronic)")
 
         self.spin_rain_sens = QDoubleSpinBox()
-        self.spin_rain_sens.setRange(0.0, 2.0)
+        self.spin_rain_sens.setRange(0.0, 10.0) # Relaxed limit
         self.spin_rain_sens.setSingleStep(0.1)
         self.spin_rain_sens.setValue(0.0)
-        self.spin_rain_sens.setToolTip("Sensitivity to Rainfall (Log-Rainfall Model)")
 
         env_layout.addRow("Flu Sensitivity:", self.spin_flu_sens)
         env_layout.addRow("Temp Sensitivity:", self.spin_temp_sens)
@@ -237,8 +228,7 @@ class GenerationWidget(QWidget):
         
         # 5. Actions
         action_layout = QHBoxLayout()
-        self.btn_reset = QPushButton("Reset Default")
-        self.btn_reset.setToolTip("Reset to Thesis Defaults")
+        self.btn_reset = QPushButton("Reset")
         self.btn_reset.clicked.connect(self._reset_params)
         
         self.btn_run = QPushButton("Run Simulation")
@@ -251,50 +241,47 @@ class GenerationWidget(QWidget):
         control_layout.addLayout(action_layout)
         
         control_layout.addStretch()
-        control_panel.setLayout(control_layout)
-        control_panel.setFixedWidth(320)
+        
+        # Set Control Panel Widget to Scroll Area
+        scroll_area.setWidget(control_panel)
+        # Set minimum width for the scroll area so controls aren't squashed
+        scroll_area.setMinimumWidth(340) 
+
+        splitter.addWidget(scroll_area)
         
         # --- Right Panel: Visualization ---
         viz_panel = QWidget()
         viz_layout = QVBoxLayout(viz_panel)
         viz_layout.setContentsMargins(0, 0, 0, 0)
         
-        # KPI Dashboard
-        kpi_row = QHBoxLayout()
-        self.kpi_sales = self._create_kpi_card("Total Demand", "0", "#007ACC")
-        self.kpi_stockout = self._create_kpi_card("Stockout Rate", "0.0%", "#d9534f")
-        self.kpi_loss = self._create_kpi_card("Loss Rate", "0.0%", "#f0ad4e")
-        self.kpi_turnover = self._create_kpi_card("Turnover Days", "0.0", "#5cb85c")
+        # KPI Table
+        self.kpi_table = QTableWidget()
+        self.kpi_table.setColumnCount(4)
+        self.kpi_table.setHorizontalHeaderLabels(["Metric", "Baseline", "Optimized", "Improvement"])
+        self.kpi_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.kpi_table.verticalHeader().setVisible(False)
+        self.kpi_table.setAlternatingRowColors(True)
+        self.kpi_table.setMaximumHeight(200)
+        viz_layout.addWidget(self.kpi_table)
         
-        kpi_row.addWidget(self.kpi_sales)
-        kpi_row.addWidget(self.kpi_stockout)
-        kpi_row.addWidget(self.kpi_loss)
-        kpi_row.addWidget(self.kpi_turnover)
-        viz_layout.addLayout(kpi_row)
-        
-        # Charts Area
+        # Charts Area (Tabbed)
         self.viz_tabs = QTabWidget()
-        self.viz_tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #ddd; }")
         
-        # Tab 1: Comprehensive Dashboard
-        self.tab_dashboard = QWidget()
-        dash_lay = QVBoxLayout()
-        self.canvas_dash = MplCanvas(self, width=8, height=6, dpi=100)
-        self.toolbar_dash = NavigationToolbar(self.canvas_dash, self)
-        dash_lay.addWidget(self.toolbar_dash)
-        dash_lay.addWidget(self.canvas_dash)
-        self.tab_dashboard.setLayout(dash_lay)
-        self.viz_tabs.addTab(self.tab_dashboard, "Overview Dashboard")
+        # Tab 1: Overview
+        self.plot_overview = PlotWidget()
+        self.viz_tabs.addTab(self.plot_overview, "Overview")
         
-        # Tab 2: Inventory Detail
-        self.tab_inv = QWidget()
-        inv_lay = QVBoxLayout()
-        self.canvas_inv = MplCanvas(self, width=8, height=6, dpi=100)
-        self.toolbar_inv = NavigationToolbar(self.canvas_inv, self)
-        inv_lay.addWidget(self.toolbar_inv)
-        inv_lay.addWidget(self.canvas_inv)
-        self.tab_inv.setLayout(inv_lay)
-        self.viz_tabs.addTab(self.tab_inv, "Inventory Flow")
+        # Tab 2: Inventory Details
+        self.plot_inventory = PlotWidget()
+        self.viz_tabs.addTab(self.plot_inventory, "Inventory Details")
+        
+        # Tab 3: Sales Analysis
+        self.plot_sales = PlotWidget()
+        self.viz_tabs.addTab(self.plot_sales, "Sales Analysis")
+        
+        # Tab 4: Loss Trend
+        self.plot_loss = PlotWidget()
+        self.viz_tabs.addTab(self.plot_loss, "Loss Trend")
         
         viz_layout.addWidget(self.viz_tabs)
         
@@ -303,51 +290,29 @@ class GenerationWidget(QWidget):
         log_layout = QVBoxLayout()
         self.log_console = QTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(120)
-        self.log_console.setStyleSheet("background: #f8f9fa; border: none; font-family: Consolas; font-size: 10pt;")
+        self.log_console.setMaximumHeight(100)
         log_layout.addWidget(self.log_console)
         log_group.setLayout(log_layout)
+        
+        # Use splitter for vertical adjustment in right panel too if needed
+        # But for now just simple layout
         viz_layout.addWidget(log_group)
         
-        # Add to Main Layout
-        main_layout.addWidget(control_panel)
-        main_layout.addWidget(viz_panel)
+        splitter.addWidget(viz_panel)
         
-    def _create_kpi_card(self, title, value, color):
-        card = QGroupBox()
-        card.setStyleSheet(f"QGroupBox {{ border: 1px solid #ddd; border-radius: 6px; background: white; border-left: 5px solid {color}; }}")
-        layout = QVBoxLayout()
-        layout.setContentsMargins(10, 10, 10, 5)
-        
-        lbl_title = QLabel(title)
-        lbl_title.setStyleSheet("color: #666; font-size: 11px; text-transform: uppercase;")
-        
-        lbl_val = QLabel(value)
-        lbl_val.setStyleSheet(f"color: {color}; font-size: 18px; font-weight: bold;")
-        lbl_val.setAlignment(Qt.AlignRight)
-        
-        layout.addWidget(lbl_title)
-        layout.addWidget(lbl_val)
-        card.setLayout(layout)
-        card.card_value_label = lbl_val # Store reference
-        return card
+        # Set initial stretch factors
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 7)
 
     def _reset_params(self):
-        """Reset parameters to Thesis defaults"""
         self.spin_initial_stock.setValue(14)
         self.spin_replenish.setValue(30)
         self.spin_lead_time.setValue(3)
-        self.combo_service_level.setCurrentIndex(1) # Medium
+        self.combo_service_level.setCurrentIndex(1)
         self.spin_flu_sens.setValue(1.0)
         self.spin_temp_sens.setValue(1.0)
         self.spin_rain_sens.setValue(0.0)
-        self.log_console.append("Parameters reset to default.")
-
-    def update_kpi(self, sales, stockout_rate, loss_rate, turnover):
-        self.kpi_sales.card_value_label.setText(f"{int(sales):,}")
-        self.kpi_stockout.card_value_label.setText(f"{stockout_rate:.2%}")
-        self.kpi_loss.card_value_label.setText(f"{loss_rate:.2%}")
-        self.kpi_turnover.card_value_label.setText(f"{turnover:.1f}")
+        self.log_console.append("Parameters reset.")
 
     def log(self, msg):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -355,12 +320,10 @@ class GenerationWidget(QWidget):
 
     def load_drugs_list(self):
         try:
-            # Thesis Logic for Classification
             volatility_counts = {'LOW': 0, 'MEDIUM': 0, 'HIGH': 0}
             items = []
             
-            if self.ext_df is None:
-                self._init_data()
+            if self.ext_df is None: self._init_data()
 
             if Path(DRUG_INFO).exists():
                 try:
@@ -372,34 +335,25 @@ class GenerationWidget(QWidget):
                 
                 for idx, row in self.drug_df.iterrows():
                     name = str(row.get('药品名称', 'Unknown'))
-                    cat = str(row.get('药品品类', 'Misc'))
-                    # Calculate or Infer Volatility
                     vol_raw = str(row.get('波动区间分类', '中波动'))
                     
                     if '低' in vol_raw:
                         vol_cat = 'Low'
                         volatility_counts['LOW'] += 1
-                        cv_display = "<0.2"
                     elif '高' in vol_raw:
                         vol_cat = 'High'
                         volatility_counts['HIGH'] += 1
-                        cv_display = ">0.5"
                     else:
                         vol_cat = 'Medium'
                         volatility_counts['MEDIUM'] += 1
-                        cv_display = "0.2-0.5"
                         
-                    items.append(f"{name} | {vol_cat} ({cv_display})")
+                    items.append(f"{name} | {vol_cat}")
                 
                 self.combo_drug.addItems(items)
-                self.log_console.append(f"Loaded {len(items)} drugs from metadata.")
-                
-                # Update UI
                 self.val_low.setText(f"{volatility_counts['LOW']} SKUs")
                 self.val_med.setText(f"{volatility_counts['MEDIUM']} SKUs")
                 self.val_high.setText(f"{volatility_counts['HIGH']} SKUs")
                 
-                # Trigger selection change to update params
                 self._on_drug_selected(0)
             else:
                 self.log_console.append("Drug Info file not found.")
@@ -412,71 +366,48 @@ class GenerationWidget(QWidget):
             return
             
         row = self.drug_df.iloc[index]
-        # Auto-set Safety Factor based on Volatility (Thesis Logic)
         vol_raw = str(row.get('波动区间分类', '中波动'))
-        if '高' in vol_raw:
-            self.spin_safety.setValue(2.33) # 99% SL
-        elif '低' in vol_raw:
-            self.spin_safety.setValue(1.65) # 95% SL
-        else:
-            self.spin_safety.setValue(1.96) # 97.5% SL
+        if '高' in vol_raw: self.spin_safety.setValue(2.33)
+        elif '低' in vol_raw: self.spin_safety.setValue(1.65)
+        else: self.spin_safety.setValue(1.96)
 
-        # Auto-set Flu Sensitivity based on Drug Category/Name Keyword
-        # Logic: Respiratory/Cold meds are highly sensitive. Chronic meds are not.
         cat_str = str(row.get('药品品类', '')).upper()
         name_str = str(row.get('药品名称', '')).upper()
         combined = cat_str + " " + name_str
         
         if any(x in combined for x in ['感冒', '流感', '病毒', '清热', '解热']):
-            # Direct Flu meds -> High Sensitivity
             self.spin_flu_sens.setValue(2.5) 
-        elif any(x in combined for x in ['呼吸', '咳', '肺', '炎', '头孢', '阿莫西林', '抗生素']):
-            # Secondary Respiratory/Antibiotics -> Medium High
+        elif any(x in combined for x in ['呼吸', '咳', '肺', '炎', '头孢', '抗生素']):
             self.spin_flu_sens.setValue(1.5)
-        elif any(x in combined for x in ['慢病', '心脑', '血压', '糖', '脂', '维', '钙']):
-            # Chronic / Maintenance -> Zero Sensitivity
+        elif any(x in combined for x in ['慢病', '心脑', '血压', '糖', '脂']):
             self.spin_flu_sens.setValue(0.0)
         else:
-            # General -> Low default
             self.spin_flu_sens.setValue(0.5)
 
     def _on_service_level_changed(self, index):
-        """Update Safety Factor (Z) based on Service Level preset"""
         self.spin_safety.setEnabled(False)
-        if index == 0:   # 95% (Low Vol)
-            self.spin_safety.setValue(1.65)
-        elif index == 1: # 98% (Medium Vol)
-            self.spin_safety.setValue(1.96)
-        elif index == 2: # 99% (High Vol)
-            self.spin_safety.setValue(2.33)
-        else:            # Custom
-            self.spin_safety.setEnabled(True)
+        if index == 0: self.spin_safety.setValue(1.65)
+        elif index == 1: self.spin_safety.setValue(1.96)
+        elif index == 2: self.spin_safety.setValue(2.33)
+        else: self.spin_safety.setEnabled(True)
 
     def start_simulation(self):
         idx = self.combo_drug.currentIndex()
-        # If no selection, allow running for first drug or internal test
         if self.drug_df is None:
-            self.log_console.append("No drug data loaded. Attempting to load default...")
+            self.log_console.append("No drug data loaded.")
             self.load_drugs_list()
             if self.drug_df is None: return
 
         if idx < 0: idx = 0
-        
-        # Fixed Duration: 2023-2024 inclusive (Leap year 2024 has 366 days)
         duration = 365 + 366 
         
-        # Abstracted Clinic Scale (1.0 = Representative Entity)
-        clinic_scale = 1.0
-            
-        # Prepare Config
         config = SimulationConfig(
             start_date=pd.Timestamp('2023-01-01'),
-            end_date=pd.Timestamp('2024-12-31'), # 2 Years
+            end_date=pd.Timestamp('2024-12-31'),
             replenishment_days=int(self.spin_replenish.value()),
-            active_clinic_scale=clinic_scale
+            active_clinic_scale=1.0
         )
         
-        # UI overrides
         config.safety_stock_factor = self.spin_safety.value()
         config.flu_sensitivity = self.spin_flu_sens.value()
         config.temp_sensitivity = self.spin_temp_sens.value()
@@ -486,25 +417,14 @@ class GenerationWidget(QWidget):
         
         row = self.drug_df.iloc[idx]
         drug_info = row.to_dict()
-        
-        # Recalculate validity in days
         try:
-             # Default to 12 months if missing
              v_months = float(row.get('效期（月）', 12))
              config.validity_days = int(v_months * 30)
         except:
              config.validity_days = 365
 
-        # Override params passed to Tuner
-        drug_info['有效期'] = config.validity_days # Already converted or passed as is? Tuner expects days now?
-        # Actually Tuner re-reads '有效期' from drug_info generally. Let's ensure it's days.
-        # But wait, Tuner.__init__ does: config.validity_days = int(self.drug_info['有效期'])
-        # If drug_info has MONTHS (from CSV), Tuner might set validity_days to 12 days!
-        # Fix: We pass the calculated days in drug_info
-        
+        drug_info['有效期'] = config.validity_days
         drug_info['补货提前期'] = int(self.spin_lead_time.value())
-        
-        # Ensure required fields exist
         drug_info['药品ID'] = str(row.get('药品编号', f'DRUG_{idx}'))
         drug_info['药品名称'] = str(row.get('药品名称', 'Unknown'))
         drug_info['单价'] = float(row.get('零售价', 35.0))
@@ -513,9 +433,8 @@ class GenerationWidget(QWidget):
         
         self.btn_run.setEnabled(False)
         self.btn_run.setText("Running...")
-        self.log_console.append(f"Starting simulation for {drug_info['药品名称']} (Scale: {clinic_scale}x)...")
+        self.log_console.append(f"Starting simulation for {drug_info['药品名称']}...")
         
-        # Start Worker
         self.worker = SimulationWorker(config, drug_info, self.ext_df, duration)
         self.worker.finished.connect(self.on_simulation_finished)
         self.worker.error.connect(self.on_simulation_error)
@@ -524,7 +443,7 @@ class GenerationWidget(QWidget):
     def on_simulation_finished(self, df: pd.DataFrame):
         self.btn_run.setEnabled(True)
         self.btn_run.setText("Run Simulation")
-        self.log_console.append(f"Simulation completed. Generated {len(df)} records.")
+        self.log_console.append(f"Data generated. Rows: {len(df)}")
         self.update_dashboard(df)
 
     def on_simulation_error(self, msg):
@@ -533,173 +452,171 @@ class GenerationWidget(QWidget):
         self.log_console.append(f"Error: {msg}")
 
     def update_dashboard(self, df: pd.DataFrame):
-        # 1. Update KPI Cards (Based on 'Optimized' scenario or blended?)
-        if 'scenario' in df.columns:
-            df_opt = df[df['scenario'] == 'Optimized']
-            if df_opt.empty: df_opt = df
-        else:
-            df_opt = df
-
-        total_sales = df_opt['sales'].sum()
-        stockout_days = len(df_opt[df_opt['stockout_flag'] == 1])
-        loss_qty = df_opt['loss'].sum()
-        
-        stockout_rate = stockout_days / len(df_opt) if len(df_opt) > 0 else 0
-        loss_rate = loss_qty / (total_sales + loss_qty) if (total_sales + loss_qty) > 0 else 0
-        
-        # Turnover Calculation: Avg Inventory / Avg Daily Sales
-        avg_inv = df_opt['inventory'].mean()
-        avg_sales = df_opt['sales'].mean()
-        turnover = avg_inv / avg_sales if avg_sales > 0 else 0
-        
-        self.update_kpi(total_sales, stockout_rate, loss_rate, turnover)
-
-        # 2. Update Charts
-        self._plot_dashboard(df)
-        self._plot_inventory_detail(df)
-
-    def _plot_dashboard(self, df: pd.DataFrame):
-        self.canvas_dash.figure.clear()
-        
-        # Grid Spec: Top for Sales/Demand, Bottom for Issues
-        gs = self.canvas_dash.figure.add_gridspec(2, 1, hspace=0.3)
-        ax1 = self.canvas_dash.figure.add_subplot(gs[0, 0])
-        ax2 = self.canvas_dash.figure.add_subplot(gs[1, 0])
-        
-        if 'scenario' not in df.columns:
-            df['scenario'] = 'Optimized'
-            
-        scenarios = df['scenario'].unique()
-        colors = {'Baseline': '#999999', 'Optimized': '#007ACC'}
-        
-        # Top Chart: Demand vs Sales
-        for sc in scenarios:
-            d = df[df['scenario'] == sc]
-            
-            # Plot Weekly Rolling Mean to reduce noise
-            roll_sales = d['sales'].rolling(7).mean()
-            linestyle = '--' if sc == 'Baseline' else '-'
-            ax1.plot(d['date'], roll_sales, label=f'Sales ({sc})', 
-                     color=colors.get(sc, 'blue'), linestyle=linestyle, alpha=0.8)
-            
-        ax1.set_title("Weekly Average Sales Trend")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Bottom Chart: Stockout Events & Loss
-        # Stacked Bar? Or Scatter?
-        # Scatter is better for events
-        for sc in scenarios:
-            d = df[df['scenario'] == sc]
-            out = d[d['stockout_flag'] > 0]
-            loss = d[d['loss'] > 0]
-            
-            offset = 0 if sc == 'Optimized' else 1
-            
-            if not out.empty:
-                ax2.scatter(out['date'], [1+offset]*len(out), marker='x', color='red', label=f'Stockout ({sc})', alpha=0.7)
-            
-            if not loss.empty:
-                # Plot Loss Magnitude?
-                ax2.bar(d['date'], d['loss'], alpha=0.3, label=f'Expiry Loss ({sc})', color='orange')
-
-        ax2.set_title("Risk Events: Stockouts (Markers) & Expiry Loss (Bars)")
-        ax2.legend()
-        
-        self.canvas_dash.draw()
-
-    def _plot_inventory_detail(self, df: pd.DataFrame):
-        self.canvas_inv.axes.clear()
-        
-        if 'scenario' not in df.columns:
-            df['scenario'] = 'Optimized'
-
-        scenarios = df['scenario'].unique()
-        colors = {'Baseline': 'gray', 'Optimized': '#28a745'}
-        
-        for sc in scenarios:
-            d = df[df['scenario'] == sc]
-            label_text = f'Inventory ({sc})'
-            self.canvas_inv.axes.plot(d['date'], d['inventory'], label=label_text, color=colors.get(sc, 'blue'), alpha=0.8)
-            
-            # Stockouts
-            out = d[d['stockout_flag'] > 0]
-            if not out.empty:
-                 self.canvas_inv.axes.scatter(out['date'], [0]*len(out), color='red', marker='x', s=20, label=f'Stockout ({sc})')
-
-        self.canvas_inv.axes.set_title("Strategy Comparison: Empirical vs ARIMA-Optimized")
-        self.canvas_inv.axes.set_xlabel("Date")
-        self.canvas_inv.axes.set_ylabel("Inventory Level")
-        self.canvas_inv.axes.legend()
-        self.canvas_inv.axes.grid(True, alpha=0.3)
-        self.canvas_inv.fig.autofmt_xdate()
-        self.canvas_inv.draw()
-
-        # KPI Report
-        self.log("\n=== Simulation Report ===")
-        for sc in scenarios:
-            sub_df = df[df['scenario'] == sc]
-            if sub_df.empty: continue
-            
-            avg_inv = sub_df['inventory'].mean()
-            stockout_days = sub_df['stockout_flag'].sum()
-            total_sales = sub_df['sales'].sum()
-            total_days = max(1, (sub_df['date'].max() - sub_df['date'].min()).days + 1)
-            
-            turnover = (avg_inv / (total_sales / total_days)) if total_sales > 0 else 0
-            service_level = 1.0 - (stockout_days / total_days)
-            
-            self.log(f"> {sc} Strategy:")
-            self.log(f"   - Avg Inventory: {avg_inv:.1f} units")
-            self.log(f"   - Turnover Days: {turnover:.1f} days")
-            self.log(f"   - Service Level: {service_level*100:.1f}% ({stockout_days} stockouts)")
-
-    def analyze_model_fit(self, df: pd.DataFrame):
-        """
-        Run ARIMA on the simulated 'Demand' data to visualize fit quality.
-        This validates that the demand pattern is indeed predictable by ARIMA.
-        """
-        self.canvas_mod.axes.clear()
-        
-        # 1. Extract Time Series (Use Baseline Demand as Ground Truth)
-        df_base = df[df['scenario'] == 'Baseline'].copy()
-        if df_base.empty: df_base = df.copy()
-            
-        if 'date' not in df_base.columns or 'demand' not in df_base.columns:
-            return
-
-        ts = df_base.set_index('date')['demand'].asfreq('D').fillna(0)
-        
-        # 2. Fit ARIMA Model
         try:
-            order = (5, 1, 0) # Weekly AR logic
-            model = ARIMA(ts, order=order)
-            res = model.fit()
+            if '日期' in df.columns or 'date' in df.columns:
+                 col_date = '日期' if '日期' in df.columns else 'date'
+                 dates = pd.to_datetime(df[col_date])
+            else:
+                 return
+
+            stock_base = df.get('Baseline_Inventory', pd.Series(0, index=df.index))
+            stock_opt = df.get('Optimized_Inventory', pd.Series(0, index=df.index))
+            sales_base = df.get('Baseline_Sales', pd.Series(0, index=df.index))
+            sales_opt = df.get('Optimized_Sales', pd.Series(0, index=df.index))
+            loss_base = df.get('Baseline_Loss', pd.Series(0, index=df.index))
+            loss_opt = df.get('Optimized_Loss', pd.Series(0, index=df.index))
             
-            fitted = res.fittedvalues
+            stockout_base_flag = df.get('Baseline_Stockout_Flag', pd.Series(0, index=df.index)) > 0
+            stockout_opt_flag = df.get('Optimized_Stockout_Flag', pd.Series(0, index=df.index)) > 0
             
-            # 4. Plot
-            self.canvas_mod.axes.plot(ts.index, ts, label='Actual Demand', color='#1f77b4', alpha=0.5)
-            self.canvas_mod.axes.plot(fitted.index, fitted, label=f'ARIMA{order} Fit', color='#ff7f0e', linestyle='--')
+            stockout_base_indices = df.index[stockout_base_flag]
+            stockout_opt_indices = df.index[stockout_opt_flag]
+
+            # --- 1. Overview Tab (3 Subplots) ---
+            fig = self.plot_overview.canvas.fig
+            fig.clear()
+            ax1 = fig.add_subplot(311)
+            ax2 = fig.add_subplot(312, sharex=ax1) 
+            ax3 = fig.add_subplot(313, sharex=ax1)
             
-            # 5. Metrics
-            aic = res.aic
-            bic = res.bic
-            mse = mean_squared_error(ts, fitted)
-            rmse = np.sqrt(mse)
-            mape = mean_absolute_percentage_error(ts[ts>0], fitted[ts>0])
+            # Inventory
+            ax1.plot(dates, stock_base, label='Baseline', color='gray', alpha=0.6)
+            ax1.plot(dates, stock_opt, label='Optimized', color='blue', linewidth=1.5)
+            if not stockout_base_indices.empty:
+                 d = dates.loc[stockout_base_indices]
+                 ax1.scatter(d, [0]*len(d), color='red', marker='x', s=20, zorder=5)
+            if not stockout_opt_indices.empty:
+                 d = dates.loc[stockout_opt_indices]
+                 ax1.scatter(d, [0]*len(d), color='orange', marker='^', s=20, zorder=5)
+            ax1.set_title('Inventory Level & Stockouts')
+            ax1.legend(loc='upper right', fontsize='x-small')
+            ax1.grid(True, alpha=0.3)
             
-            self.log(f"\n=== Model Fit Diagnostics ===")
-            self.log(f"   - Model Order: ARIMA{order}")
-            self.log(f"   - AIC: {aic:.2f} | BIC: {bic:.2f}")
-            self.log(f"   - RMSE: {rmse:.4f}")
-            self.log(f"   - MAPE: {mape:.2%}")
+            # Sales
+            ax2.plot(dates, sales_base, label='Baseline', color='orange', alpha=0.6, linestyle='--')
+            ax2.plot(dates, sales_opt, label='Optimized', color='green', alpha=0.8)
+            ax2.set_title('Sales')
+            ax2.legend(loc='upper right', fontsize='x-small')
+            ax2.grid(True, alpha=0.3)
             
-            self.canvas_mod.axes.set_title(f"ARIMA Model Fit (RMSE={rmse:.2f}, MAPE={mape:.1%})")
-            self.canvas_mod.axes.legend()
-            self.canvas_mod.axes.grid(True, alpha=0.3)
-            self.canvas_mod.fig.autofmt_xdate()
-            self.canvas_mod.draw()
+            # Cumulative Stockout
+            cum_base = stockout_base_flag.astype(int).cumsum()
+            cum_opt = stockout_opt_flag.astype(int).cumsum()
+            ax3.plot(dates, cum_base, label='Baseline Cum Stockouts', color='red')
+            ax3.plot(dates, cum_opt, label='Optimized Cum Stockouts', color='green')
+            ax3.fill_between(dates, cum_base, cum_opt, color='green', alpha=0.1)
+            ax3.set_title('Cumulative Stockout Days')
+            ax3.legend(loc='upper left', fontsize='x-small')
+            ax3.grid(True, alpha=0.3)
             
+            try:
+                ax3.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+                ax3.xaxis.set_major_locator(mdates.AutoDateLocator())
+                fig.autofmt_xdate()
+            except: pass
+            fig.tight_layout()
+            self.plot_overview.canvas.draw()
+            
+            # --- 2. Inventory Detail Tab ---
+            fig_inv = self.plot_inventory.canvas.fig
+            fig_inv.clear()
+            ax_inv = fig_inv.add_subplot(111)
+            ax_inv.plot(dates, stock_base, label='Baseline', color='gray', alpha=0.7)
+            ax_inv.plot(dates, stock_opt, label='Optimized', color='blue', linewidth=2)
+            if not stockout_base_indices.empty:
+                d = dates.loc[stockout_base_indices]
+                ax_inv.scatter(d, [0]*len(d), color='red', marker='x', s=50, label='Baseline Stockout', zorder=5)
+            if not stockout_opt_indices.empty:
+                d = dates.loc[stockout_opt_indices]
+                ax_inv.scatter(d, [0]*len(d), color='orange', marker='^', s=50, label='Optimized Stockout', zorder=5)
+            ax_inv.set_title('Detailed Inventory Comparison')
+            ax_inv.set_ylabel('Stock Quantity')
+            ax_inv.legend()
+            ax_inv.grid(True, alpha=0.3)
+            try:
+                ax_inv.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+                ax_inv.xaxis.set_major_locator(mdates.AutoDateLocator())
+                fig_inv.autofmt_xdate()
+            except: pass
+            fig_inv.tight_layout()
+            self.plot_inventory.canvas.draw()
+            
+            # --- 3. Sales Detail Tab ---
+            fig_sales = self.plot_sales.canvas.fig
+            fig_sales.clear()
+            ax_sales = fig_sales.add_subplot(111)
+            ax_sales.plot(dates, sales_base, label='Baseline', color='orange', linestyle='--')
+            ax_sales.plot(dates, sales_opt, label='Optimized', color='green', linewidth=1.5)
+            ax_sales.set_title('Daily Sales Comparison')
+            ax_sales.legend()
+            ax_sales.grid(True, alpha=0.3)
+            try:
+                ax_sales.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+                ax_sales.xaxis.set_major_locator(mdates.AutoDateLocator())
+                fig_sales.autofmt_xdate()
+            except: pass
+            fig_sales.tight_layout()
+            self.plot_sales.canvas.draw()
+
+            # --- 4. Loss Tab ---
+            fig_loss = self.plot_loss.canvas.fig
+            fig_loss.clear()
+            ax_l1 = fig_loss.add_subplot(211)
+            ax_l2 = fig_loss.add_subplot(212, sharex=ax_l1)
+            
+            ax_l1.bar(dates, loss_base, label='Baseline Expiry', color='red', alpha=0.5, width=2)
+            ax_l1.bar(dates, loss_opt, label='Optimized Expiry', color='purple', alpha=0.5, width=2)
+            ax_l1.set_title('Daily Expiration Loss')
+            ax_l1.set_ylabel('Qty Expired')
+            ax_l1.legend()
+            ax_l1.grid(True, alpha=0.3)
+            
+            cum_loss_base = loss_base.cumsum()
+            cum_loss_opt = loss_opt.cumsum()
+            ax_l2.plot(dates, cum_loss_base, label='Baseline Cumulative', color='darkred', linewidth=2)
+            ax_l2.plot(dates, cum_loss_opt, label='Optimized Cumulative', color='indigo', linewidth=2)
+            ax_l2.fill_between(dates, cum_loss_base, cum_loss_opt, color='indigo', alpha=0.1, label='Loss Reduction')
+            ax_l2.set_title('Cumulative Expiration Trend')
+            ax_l2.set_ylabel('Total Qty Lost')
+            ax_l2.legend()
+            ax_l2.grid(True, alpha=0.3)
+            
+            try:
+                ax_l2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+                ax_l2.xaxis.set_major_locator(mdates.AutoDateLocator())
+                fig_loss.autofmt_xdate()
+            except: pass
+            fig_loss.tight_layout()
+            self.plot_loss.canvas.draw()
+
+            # KPI Table
+            base_loss = df.get('Baseline_Loss', pd.Series([0])).sum()
+            opt_loss = df.get('Optimized_Loss', pd.Series([0])).sum()
+            loss_imp = (base_loss - opt_loss) / base_loss * 100 if base_loss > 0 else 0
+            
+            base_stockout = (df.get('Baseline_Stockout_Flag', pd.Series([0])) > 0).sum()
+            opt_stockout = (df.get('Optimized_Stockout_Flag', pd.Series([0])) > 0).sum()
+            stock_imp = (base_stockout - opt_stockout) / base_stockout * 100 if base_stockout > 0 else 0
+            
+            metrics = [
+                ("Total Loss", f"{base_loss:.0f}", f"{opt_loss:.0f}", f"{loss_imp:.1f}%"),
+                ("Stockout Days", f"{base_stockout}", f"{opt_stockout}", f"{stock_imp:.1f}%")
+            ]
+            
+            self.kpi_table.setRowCount(len(metrics))
+            for i, (m, b, o, imp) in enumerate(metrics):
+                self.kpi_table.setItem(i, 0, QTableWidgetItem(m))
+                self.kpi_table.setItem(i, 1, QTableWidgetItem(b))
+                self.kpi_table.setItem(i, 2, QTableWidgetItem(o))
+                
+                item_imp = QTableWidgetItem(imp)
+                if float(imp.strip('%')) > 0:
+                    item_imp.setForeground(QColor('green'))
+                else:
+                    item_imp.setForeground(QColor('red'))
+                self.kpi_table.setItem(i, 3, item_imp)
+                
         except Exception as e:
-            self.log(f"ARIMA Analysis Failed: {str(e)}")
+            # self.log_console.append(str(e))
+            print(e)
+            print(traceback.format_exc())

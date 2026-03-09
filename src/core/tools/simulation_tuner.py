@@ -6,6 +6,7 @@ import copy
 from src.core.algorithms.mcmc_transition import MCMC_Transition
 from src.core.simulation_config import SimulationConfig
 from src.core.thesis_params import ThesisParams
+from src.core import constants as C
 
 class SimulationTuner:
     """
@@ -61,7 +62,7 @@ class SimulationTuner:
     def run_simulation_only(self, total_days=730) -> pd.DataFrame:
         """
         Run side-by-side simulation: Baseline (A) vs Optimized (B).
-        Returns a combined DataFrame with a 'scenario' column.
+        Returns a Combined Wide-Format DataFrame for direct comparison.
         """
         self._report_progress('start', {'total_days': total_days, 'drug_id': self.drug_info.get('药品ID')})
         
@@ -70,7 +71,6 @@ class SimulationTuner:
         seed_value = 42
         
         # --- Scenario A: Baseline (Empirical) ---
-        # Logic: Fixed R=30, Manual Safety Stock (High Inventory, Low Service Level if Demand Spikes)
         config_a = copy.deepcopy(self.base_config)
         
         # Reset Random State for Baseline
@@ -78,49 +78,59 @@ class SimulationTuner:
         random.seed(seed_value)
         
         # Force "Baseline" behavior
-        # In current MCMC_Transition, mode is date-dependent. 
-        # We need to FORCE the mode.
-        # Let's modify MCMC_Transition or use a subclass?
-        # Simpler: Pass a flag in Config or DrugInfo to MCMC?
-        # Or just run it and let MCMC decide based on date?
-        # The user wants "Optimization", so let's stick to the Thesis Split:
-        # 2023-2024 (Sep) = Baseline, 2024 (Sep-Dec) = Optimized.
-        # BUT for "What-If" analysis, we want to see what Optimized WOULD have done in 2023.
-        
-        # Strategy: Run TWO independent timelines.
-        # 1. Baseline Run: Mode always 'BASELINE'
         sim_a = MCMC_Transition(config_a, self.drug_info, self.external_data)
-        # We need to hack/force the mode in MCMC. 
-        # For now, let's assume MCMC switches at 'test_split_date'.
-        # To force Baseline, we set 'test_split_date' to FAR FUTURE.
         ThesisParams.SAMPLE_INFO['test_split_date'] = '2099-12-31' 
         
         df_a = sim_a.run_simulation(duration_days=total_days)
-        df_a['scenario'] = 'Baseline'
         
-        # 2. Optimized Run: Mode always 'OPTIMIZED'
-        # To force Optimized, we set 'test_split_date' to FAR PAST.
+        # --- Scenario B: Optimized (AI Models) ---
         ThesisParams.SAMPLE_INFO['test_split_date'] = '2000-01-01'
         
-        # Crucial: Optimized run should use the UI parameters (L, R, S)
-        # The UI config (self.base_config) has the user's chosen values.
-        # We need to ensure MCMC uses them in 'OPTIMIZED' mode calculations.
         config_b = copy.deepcopy(self.base_config)
         
-        # Reset Random State for Optimized (MUST MATCH BASELINE)
+        # Reset Random State for Optimized
         np.random.seed(seed_value)
         random.seed(seed_value)
         
         sim_b = MCMC_Transition(config_b, self.drug_info, self.external_data)
         df_b = sim_b.run_simulation(duration_days=total_days)
-        df_b['scenario'] = 'Optimized'
         
-        # Combine
-        full_df = pd.concat([df_a, df_b], ignore_index=True)
-        
-        # Restore Global State (Clean up)
-        # (Ideally shouldn't modify global state, but for this demo script it's effective)
+        # Restore Global State
         ThesisParams.SAMPLE_INFO['test_split_date'] = '2024-09-01' 
 
+        # --- Pivot & Merge for Visualization ---
+        # 1. Standardize Dates
+        if 'date' in df_a.columns:
+             df_a = df_a.rename(columns={'date': C.COL_DATE})
+        if 'date' in df_b.columns:
+             df_b = df_b.rename(columns={'date': C.COL_DATE})
+             
+        # 2. Select and Rename Metrics
+        cols_to_keep = [C.COL_DATE, 'inventory', 'loss', 'stockout_flag', 'sales']
+        
+        # Helper to process DF
+        def process_df(df, prefix):
+            # Check for missing columns (e.g. if simulation failed/empty)
+            for c in cols_to_keep:
+                if c not in df.columns:
+                    df[c] = 0
+            
+            sub = df[cols_to_keep].copy()
+            rename_map = {
+                'inventory': f'{prefix}_Inventory',
+                'loss': f'{prefix}_Loss',
+                'stockout_flag': f'{prefix}_Stockout_Flag',
+                'sales': f'{prefix}_Sales'
+            }
+            return sub.rename(columns=rename_map)
+
+        df_a_clean = process_df(df_a, 'Baseline')
+        df_b_clean = process_df(df_b, 'Optimized')
+        
+        # 3. Merge
+        full_df = pd.merge(df_a_clean, df_b_clean, on=C.COL_DATE, how='outer')
+        full_df = full_df.fillna(0) # Fill missings with 0
+        full_df = full_df.sort_values(by=C.COL_DATE)
+        
         self._report_progress('complete', {'rows': len(full_df)})
         return full_df
