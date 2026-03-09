@@ -25,6 +25,12 @@ except ImportError:
     
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+
+# FIX: Set Font for Chinese Characters Support in Matplotlib
+# SimHei is standard for Windows, ensure it falls back gracefully
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False # Fix minus sign display
 
 # Core Logic
 from src.core.tools.simulation_tuner import SimulationTuner
@@ -474,9 +480,11 @@ class EvolutionWidget(QWidget):
         try:
             if '日期' in df.columns or 'date' in df.columns:
                  col_date = '日期' if '日期' in df.columns else 'date'
-                 dates = pd.to_datetime(df[col_date])
-                 # FIX: Set index to DatetimeIndex for slicing by date string
-                 df = df.set_index(dates) 
+                 # Ensure datetime
+                 dates_series = pd.to_datetime(df[col_date])
+                 # FIX: Set index to DatetimeIndex and update 'dates' variable to be the index
+                 df = df.set_index(dates_series)
+                 dates = df.index 
             else:
                  return
 
@@ -504,9 +512,10 @@ class EvolutionWidget(QWidget):
             ax1.plot(dates, stock_opt, label='Evolution (Manual -> AI)', color='blue', linewidth=1.5)
             
             # Vertical Split Line
-            ax1.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=1.5, label='Switch Date')
+            ax1.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=1.5, label='Experiment Start (Optimized)')
             
-            ax1.set_title('Evolution Simulation: Inventory Levels')
+            drug_name = self.current_drug_info.get('药品名称', 'Target Drug')
+            ax1.set_title(f'Evolution Simulation: Inventory Levels - {drug_name}')
             ax1.legend(loc='upper right', fontsize='x-small')
             ax1.grid(True, alpha=0.3)
             
@@ -538,9 +547,9 @@ class EvolutionWidget(QWidget):
             
             # Highlight AI Region
             # ax_inv.axvspan(split_date_ts, dates.max(), color='green', alpha=0.05, label='AI Active Region')
-            ax_inv.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=2, label='Switch Date')
+            ax_inv.axvline(x=split_date_ts, color='red', linestyle='--', linewidth=2, label='Experiment Start (Optimized)')
 
-            ax_inv.set_title('Detailed Inventory: Before vs After Switch')
+            ax_inv.set_title(f'Detailed Inventory: Before vs After - {self.current_drug_info.get("药品名称")}')
             ax_inv.set_ylabel('Stock Quantity')
             ax_inv.legend()
             ax_inv.grid(True, alpha=0.3)
@@ -550,6 +559,49 @@ class EvolutionWidget(QWidget):
             except: pass
             fig_inv.tight_layout()
             self.plot_inventory.canvas.draw()
+
+            # --- 3. Sales Analysis Tab ---
+            fig_sales = self.plot_sales.canvas.fig
+            fig_sales.clear()
+            
+            # Single plot as requested: Sales Line + Trend + Stockout Markers
+            ax_s1 = fig_sales.add_subplot(111)
+            
+            # Use 'Optimized' series as the main view
+            demand_opt = df.get('Optimized_Demand', pd.Series(0, index=df.index))
+            sales_opt = df.get('Optimized_Sales', pd.Series(0, index=df.index))
+            
+            # 1. Sales Line
+            ax_s1.plot(dates, sales_opt, label='Actual Sales', color='green', alpha=0.4, linewidth=1)
+            
+            # 2. Trend Curve (7-Day Rolling Mean - De-noised)
+            sales_trend = sales_opt.rolling(window=7, min_periods=1, center=True).mean()
+            ax_s1.plot(dates, sales_trend, label='Sales Trend (7d Avg)', color='orange', linewidth=2.5)
+            
+            # 3. Stockout Markers (Red X at y=0)
+            # Filter dates where stockout happened
+            stockout_mask = stockout_opt_flag.astype(bool)
+            stockout_dates = dates[stockout_mask]
+            
+            if len(stockout_dates) > 0:
+                # Plot X markers at y=0 on the stockout dates
+                ax_s1.scatter(stockout_dates, [0] * len(stockout_dates), 
+                              color='red', marker='x', s=60, label='Stockout Event', zorder=5)
+
+            # Switch Date Line
+            ax_s1.axvline(x=split_date_ts, color='blue', linestyle='--', linewidth=1.5, label='Experiment Start (Optimized)')
+
+            ax_s1.set_title(f'Sales Analysis: Trend & Stockouts - {self.current_drug_info.get("药品名称")}')
+            ax_s1.legend(loc='upper right', fontsize='x-small')
+            ax_s1.grid(True, alpha=0.3)
+            
+            try:
+                ax_s1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                fig_sales.autofmt_xdate()
+            except: pass
+            
+            fig_sales.tight_layout()
+            self.plot_sales.canvas.draw()
             
             # --- KPI Table ---
             # Updated to Compare 2024 Q4 (Baseline) vs 2025 Q4 (Optimized)
