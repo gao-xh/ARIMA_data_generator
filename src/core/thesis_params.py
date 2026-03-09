@@ -59,10 +59,10 @@ class ThesisParams:
         },
         'MEDIUM': {
             'noise_mult': 0.5,      # Reduced from 0.6
-            'temp_sens': 0.8,
-            'flu_sens': 0.8,
+            'temp_sens': 0.6,       # Reduced from 0.8 (Slightly lower impact)
+            'flu_sens': 0.6,        # Reduced from 0.8
             'season_sens': 0.5,
-            'rain_sens': 0.3,       # Moderate rain impact
+            'rain_sens': 0.2,       # Moderate rain impact (Reduced from 0.3)
             'weekend_mult': 0.85,   # Lower acute care visits on weekends
             'validity_days': 360,   # Standard 1 year
             'safety_factor': 1.96,  # Z=1.96 for ~97.5% Service Level (or just 1.5 multiplier)
@@ -71,10 +71,10 @@ class ThesisParams:
         },
         'HIGH': {
             'noise_mult': 1.2,      # Reduced from 2.5 to improve R2 (from 0.13 -> ~0.4+)
-            'temp_sens': 1.5,
-            'flu_sens': 2.0,        # Hyper Sensitive to Flu/Weather
+            'temp_sens': 1.2,       # Reduced from 1.5 (Slightly lower impact)
+            'flu_sens': 1.5,        # Reduced from 2.0 (Hyper Sensitive but constrained)
             'season_sens': 1.0,
-            'rain_sens': 0.5,       # High sensitivity to all external factors
+            'rain_sens': 0.4,       # High sensitivity to all external factors (Reduced from 0.5)
             'weekend_mult': 0.95,   # No clear pattern (Emergencies equal)
             'validity_days': 180,   # Short shelf life -> High Loss (Target 17.2%)
             'safety_factor': 2.33,  # Z=2.33 for 99% Service Level to prevent stockout

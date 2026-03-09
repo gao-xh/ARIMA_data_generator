@@ -50,7 +50,23 @@ class TraditionalARIMA:
         else: # Mid Volatility
             self.order = (2, 1, 2)
             
-        logger.info(f"Traditional ARIMA Init | Class: {self.fluctuation_class} | Order: {self.order} | Exog: NONE")
+        logger.info(f"Traditional ARIMA Init | Class: {self.fluctuation_class} | Order: {self.order} | Annual Cycle: Fourier(365)")
+
+    def _generate_fourier_terms(self, dates: pd.DatetimeIndex, k: int = 2) -> pd.DataFrame:
+        """
+        Generates Fourier terms for annual seasonality (Period=365.25).
+        This allows the 'Univariate' Traditional model to have a 'Yearly Cycle'
+        without using external data (like ImprovedARIMA does).
+        """
+        # Day of year (1-366)
+        doyl = dates.dayofyear
+        
+        exog = pd.DataFrame(index=dates)
+        for i in range(1, k + 1):
+            exog[f'sin_{i}'] = np.sin(2 * np.pi * i * doyl / 365.25)
+            exog[f'cos_{i}'] = np.cos(2 * np.pi * i * doyl / 365.25)
+            
+        return exog
 
     def prepare_data(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         """
@@ -74,18 +90,25 @@ class TraditionalARIMA:
         return df
 
     def train(self, train_df: pd.DataFrame):
-        """Trains the Traditional ARIMA model (Endog only)."""
+        """Trains the Traditional ARIMA model (Endog + Fourier Seasonality)."""
         data = self.prepare_data(train_df, is_training=True)
         endog = data[C.COL_SALES] # Target variable
         
+        # Generate Internal Seasonality (Fourier)
+        exog = self._generate_fourier_terms(data.index)
+        
         try:
-            # Initialize ARIMA (No Exog)
-            self.model = ARIMA(endog, order=self.order, 
+            # Initialize ARIMA (With Time-Based Seasonality)
+            self.model = ARIMA(endog, exog=exog, order=self.order, 
                              enforce_stationarity=False, 
                              enforce_invertibility=False)
             
             self.model_fit = self.model.fit()
             
+            # Save the last date for forecasting
+            self.last_train_date = data.index[-1]
+            self.train_freq = pd.infer_freq(data.index) or 'D'
+
             # Calculate Metrics
             try:
                 self.metrics['aic'] = self.model_fit.aic
@@ -116,13 +139,20 @@ class TraditionalARIMA:
     def predict(self, steps: int, external_data: pd.DataFrame = None) -> pd.Series:
         """
         Generates forecast.
-        Ignores external_data (since it's univariate).
+        Ignores external_data (since it's univariate), but uses generated Fourier terms.
         """
         if self.model_fit is None:
             raise ValueError("Model not trained yet.")
             
-        # Forecast
-        forecast_result = self.model_fit.get_forecast(steps=steps)
+        # Generate Future Index for Fourier Terms
+        start_date = self.last_train_date + pd.Timedelta(days=1)
+        future_index = pd.date_range(start=start_date, periods=steps, freq=self.train_freq)
+        
+        # Consistent Fourier Generation
+        future_exog = self._generate_fourier_terms(future_index)
+            
+        # Forecast with Exog (Seasonality)
+        forecast_result = self.model_fit.get_forecast(steps=steps, exog=future_exog)
         forecast_series = forecast_result.predicted_mean
         
         # Ensure non-negative

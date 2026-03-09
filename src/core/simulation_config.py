@@ -25,7 +25,7 @@ class SimulationConfig:
     # 4. External Sensitivity (Thesis Conclusion 1: External factors matter)
     # These coefficients control how much Temp/Flu modifies base demand.
     temp_sensitivity: float = 1.0   # Cold weather impact multiplier
-    flu_sensitivity: float = 1.2    # Flu outbreak impact multiplier (Reduced from 2.5 to avoid crazy stockouts)
+    flu_sensitivity: float = 1.0    # Flu outbreak impact multiplier (Reduced to standard level)
     rain_sensitivity: float = 0.0   # Rainfall impact multiplier
     
     # 7. Inventory Strategy

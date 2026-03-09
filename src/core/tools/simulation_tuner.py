@@ -205,9 +205,41 @@ class SimulationTuner:
                 if C.COL_DATE in ext_df.columns:
                      # Filter duplicates in merge just in case
                      ext_df = ext_df.drop_duplicates(subset=[C.COL_DATE])
+                     
+                     # 1. First, ensure date types match
+                     if not pd.api.types.is_datetime64_any_dtype(validation_df[C.COL_DATE]):
+                         validation_df[C.COL_DATE] = pd.to_datetime(validation_df[C.COL_DATE])
+                     if not pd.api.types.is_datetime64_any_dtype(ext_df[C.COL_DATE]):
+                         ext_df[C.COL_DATE] = pd.to_datetime(ext_df[C.COL_DATE])
+
+                     # Rename external columns to match ImprovedARIMA expectations
+                     # ImprovedARIMA expects: ['平均气温', '降雨量', '流感发病率', 'ILI%']
+                     col_map = {
+                        '平均气温2m(℃)': '平均气温',
+                        '平均降水量(mm)': '降雨量',
+                        'ILI%': 'ILI%',
+                        '流感发病率': '流感发病率',
+                        C.EXT_FLU: 'ILI%'
+                     }
+                     # Standardize ext_df columns before merge
+                     ext_df = ext_df.rename(columns=col_map)
+
+                     # 2. Merge - Using 'left' keeps simulation rows, but fills weather data
                      validation_df = pd.merge(validation_df, ext_df, on=C.COL_DATE, how='left')
-            
-            # Fill NaN
+                     
+                     # 3. CRITICAL: Fill Missing Weather Data (Forward Fill then Backward Fill)
+                     # Simulation might generate dates slightly outside external data range
+                     # or external data might have gaps.
+                     # We MUST fill these gaps, otherwise NaNs will propagate and kill the regression.
+                     # List of raw columns needed by ImprovedARIMA
+                     raw_weather_cols = ['平均气温', '降雨量', '流感发病率', 'ILI%']
+                     
+                     # Fill NaNs in these columns
+                     for col in raw_weather_cols:
+                         if col in validation_df.columns:
+                             validation_df[col] = validation_df[col].ffill().bfill().fillna(0)
+
+            # Fill NaN for other columns
             validation_df = validation_df.fillna(0)
             
             # Split Train/Test
@@ -243,9 +275,23 @@ class SimulationTuner:
                      steps = len(test_data)
                      if steps > 0:
                          val_preds = validator_model.predict(steps, future_exog_df=test_data)
+                         
+                         # Convert List to Series with DatetimeIndex for map alignment
+                         if isinstance(val_preds, list):
+                             # Ensure index aligns with test_data dates
+                             if C.COL_DATE in test_data.columns:
+                                 idx = test_data[C.COL_DATE]
+                             else:
+                                 idx = test_data.index
+                                 
+                             val_preds = pd.Series(val_preds, index=idx)
+                             
                          if isinstance(val_preds, pd.Series):
+                            # Map to full_df Date column
                             full_df['Pure_ARIMAX_Forecast'] = full_df[C.COL_DATE].map(val_preds)
                  except Exception as e:
+                     import traceback
+                     traceback.print_exc()
                      print(f"Error in Enhanced ARIMAX: {e}") 
 
                  # 2. Traditional ARIMA (Baseline Comparison)

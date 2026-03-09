@@ -100,7 +100,13 @@ class EvolutionWidget(QWidget):
                     if date_col != C.COL_DATE:
                         self.ext_df = self.ext_df.rename(columns={date_col: C.COL_DATE})
                     
-                    self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE])
+                    # Fix: Handle integer dates like 20240101 -> String -> DateTime
+                    # This prevents them from being read as nanoseconds (1970)
+                    if pd.api.types.is_numeric_dtype(self.ext_df[C.COL_DATE]):
+                        self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE].astype(str), format='%Y%m%d', errors='coerce')
+                    else:
+                        self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE], errors='coerce')
+                    
                     self.ext_df = self.ext_df.set_index(C.COL_DATE, drop=False)
             else:
                 # Mock External Data if missing
@@ -311,7 +317,11 @@ class EvolutionWidget(QWidget):
         
         # Tab 6: Method Comparison (Enhanced vs Traditional) - NEW
         self.plot_comparison = PlotWidget()
-        self.viz_tabs.addTab(self.plot_comparison, "Method Comparison")
+        self.viz_tabs.addTab(self.plot_comparison, "Method Comparison (Training)")
+
+        # Tab 7: Forecast Comparison (Test Set) - NEW
+        self.plot_forecast = PlotWidget()
+        self.viz_tabs.addTab(self.plot_forecast, "Forecast Comparison (Test)")
         
         viz_splitter.addWidget(self.viz_tabs)
         
@@ -768,6 +778,54 @@ class EvolutionWidget(QWidget):
             
             fig_comp.tight_layout()
             self.plot_comparison.canvas.draw()
+            
+            # --- 7. Forecast Comparison Tab (Test Set) ---
+            # Compare Predictions vs Real on the Test Set
+            fig_fore = self.plot_forecast.canvas.fig
+            fig_fore.clear()
+            ax_fore = fig_fore.add_subplot(111)
+
+            # --- Define Test Slice ---
+            mask_test = dates > split_date_ts
+            dates_test = dates[mask_test]
+            
+            if len(dates_test) > 0:
+                demand_test = real_demand[mask_test]
+                trend_test = real_trend[mask_test]
+                
+                # Get Forecast Series (Test Period)
+                # These columns were populated by SimulationTuner
+                enhanced_cast = df.get('Pure_ARIMAX_Forecast', pd.Series(np.nan, index=df.index))[mask_test]
+                trad_cast = df.get('Traditional_ARIMA_Forecast', pd.Series(np.nan, index=df.index))[mask_test]
+                
+                # Filter out pure NaNs or Zeros if needed (though forecast should be continuous)
+                # 1. Real Demand
+                ax_fore.plot(dates_test, demand_test, label='Real Demand (Test)', color='lightgray', alpha=0.6, linewidth=1.0)
+                
+                # 2. Real Trend
+                ax_fore.plot(dates_test, trend_test, label='Real Trend (7d Avg)', color='green', alpha=0.7, linewidth=1.5, linestyle='-')
+                
+                # 3. Traditional Forecast
+                if not trad_cast.isna().all():
+                     ax_fore.plot(dates_test, trad_cast, label='Traditional ARIMA Forecast', color='orange', linewidth=2.0, linestyle='--')
+                     
+                # 4. Enhanced Forecast
+                if not enhanced_cast.isna().all():
+                     ax_fore.plot(dates_test, enhanced_cast, label='Enhanced ARIMAX Forecast', color='red', linewidth=2.0, linestyle='-')
+
+                ax_fore.set_title(f'Forecast Accuracy: Enhanced vs Traditional (Test Set) - {self.current_drug_info.get("药品名称")}')
+                ax_fore.legend(loc='upper left')
+                ax_fore.grid(True, alpha=0.3)
+                
+                try:
+                    ax_fore.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                    fig_fore.autofmt_xdate()
+                except: pass
+            else:
+                ax_fore.text(0.5, 0.5, "No Test Data Available", ha='center', va='center')
+
+            fig_fore.tight_layout()
+            self.plot_forecast.canvas.draw()
             
             # --- KPI Table ---
             # Updated to Compare 2024 Q4 (Baseline) vs 2025 Q4 (Optimized)

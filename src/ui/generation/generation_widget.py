@@ -84,7 +84,13 @@ class GenerationWidget(QWidget):
                     if date_col != C.COL_DATE:
                         self.ext_df = self.ext_df.rename(columns={date_col: C.COL_DATE})
                     
-                    self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE])
+                    # Fix: Handle integer dates like 20240101 -> String -> DateTime
+                    # This prevents them from being read as nanoseconds (1970)
+                    if pd.api.types.is_numeric_dtype(self.ext_df[C.COL_DATE]):
+                         self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE].astype(str), format='%Y%m%d', errors='coerce')
+                    else:
+                         self.ext_df[C.COL_DATE] = pd.to_datetime(self.ext_df[C.COL_DATE], errors='coerce')
+
                     self.ext_df = self.ext_df.set_index(C.COL_DATE, drop=False)
             else:
                 # Mock External Data if missing

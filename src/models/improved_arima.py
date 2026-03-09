@@ -49,22 +49,41 @@ class ImprovedARIMA:
 
     def _setup_params(self):
         """Sets up model parameters (p,d,q) and exogenous variables based on fluctuation class."""
-        # 2.3.3 Dynamic Parameter Optimization (Fixed per doc requirements)
-        if self.fluctuation_class == C.FLUC_LOW: # Low Volatility (CV < 0.2)
+        
+        # --- 1. Define Candidate Exogenous Variables (Based on external_factors.csv) ---
+        # We assume the CSV has columns like:
+        # - 平均气温 (Mean Temp) -> Used to create Temp_Std
+        # - 降雨量 (Rainfall)    -> Used to create Rain_Log
+        # - 流感发病率 (Flu Rate) -> Direct use
+        # - ILI% (Influenza-like Illness) -> Direct use
+        
+        self.weather_cols = ['平均气温', '降雨量'] 
+        self.disease_cols = ['流感发病率', 'ILI%']
+        
+        # Fourier Terms for Annual Seasonality (Always used)
+        self.fourier_cols = ['sin_1', 'cos_1', 'sin_2', 'cos_2']
+        
+        # --- 2. Dynamic Selection Strategy (Thesis 2.3.3) ---
+        # Modified Plan (User Feedback): 
+        # ALWAYS include external factors to ensure "Regulation" is visible if correlation exists.
+        # Let the optimizer (ARIMA logic) decide significance via coefficients.
+        
+        # Base Exog: S_index + Fourier + Weather + Disease
+        # Note: We use 'Temp_Std' and 'Rain_Log' which are transformed from raw data
+        full_exog = ['S_index'] + self.fourier_cols + ['Temp_Std', 'Rain_Log', '流感发病率', 'ILI%']
+        
+        if self.fluctuation_class == C.FLUC_LOW: # Low Volatility
             self.order = (1, 0, 1)
-            # Only Seasonality as Exog
-            self.exog_cols = ['S_index'] 
+            # Previously restricted, now enabling full regulation check
+            self.exog_cols = full_exog
             
-        elif self.fluctuation_class == C.FLUC_HIGH: # High Volatility (CV > 0.5)
+        elif self.fluctuation_class == C.FLUC_HIGH: # High Volatility
             self.order = (3, 1, 3)
-            # All factors: Season, Temp_Std, Rain_Log, Flu, ILI
-            # Updated to use Transformed Features (Temp_Std, Rain_Log) per Thesis
-            self.exog_cols = ['S_index', 'Temp_Std', 'Rain_Log', '流感发病率', C.EXT_FLU]
+            self.exog_cols = full_exog
             
-        else: # Mid Volatility (Default: 0.2 <= CV <= 0.5)
+        else: # Mid Volatility (Default)
             self.order = (2, 1, 2)
-            # Season, Temp_Std, Rain_Log, Flu
-            self.exog_cols = ['S_index', 'Temp_Std', 'Rain_Log', '流感发病率']
+            self.exog_cols = full_exog
             
         logger.info(f"Model Init | Class: {self.fluctuation_class} | Order: {self.order} | Exog: {self.exog_cols}")
 
@@ -90,43 +109,91 @@ class ImprovedARIMA:
                 
         return s_index_map
 
+    def _generate_fourier_terms(self, dates: pd.DatetimeIndex, k: int = 2) -> pd.DataFrame:
+        """
+        Generates Fourier terms for annual seasonality (Period=365.25).
+        """
+        if not isinstance(dates, pd.DatetimeIndex):
+             return pd.DataFrame()
+             
+        # Day of year (1-366)
+        doyl = dates.dayofyear
+        
+        exog = pd.DataFrame(index=dates)
+        for i in range(1, k + 1):
+            exog[f'sin_{i}'] = np.sin(2 * np.pi * i * doyl / 365.25)
+            exog[f'cos_{i}'] = np.cos(2 * np.pi * i * doyl / 365.25)
+            
+        return exog
+
     def prepare_data(self, df: pd.DataFrame, is_training: bool = True) -> pd.DataFrame:
         """
-        Prepares standard dataframe for ARIMAX.
-        Expects columns: ['Date', 'Sales', '平均气温', ...]
+        Prepares standard dataframe for ARIMAX pipeline.
+        Crucially, this handles Feature Engineering for External Factors.
         """
         df = df.copy()
+        
+        # 1. Date Indexing
         if not pd.api.types.is_datetime64_any_dtype(df[C.COL_DATE]):
             df[C.COL_DATE] = pd.to_datetime(df[C.COL_DATE])
-            
-        df = df.sort_values(C.COL_DATE)
+        df = df.sort_values(C.COL_DATE).set_index(C.COL_DATE)
         
-        # Calculate S_index
+        # 2. Frequency Standardization
+        try:
+             # Try to infer freq, default to Daily
+             inferred_freq = pd.infer_freq(df.index)
+             if inferred_freq:
+                df = df.asfreq(inferred_freq)
+             else:
+                df = df.asfreq('D')
+             
+             # FF/BF ensures no gaps in timeline
+             df = df.ffill().bfill() 
+        except:
+             pass 
+
+        # 3. Feature Engineering: S_index (Seasonality)
         if is_training:
-            self.s_index_map = self._calculate_s_index(df)
-            
-        # Apply Map
-        df['Month'] = df[C.COL_DATE].dt.month
-        # Use map with fillna(1.0)
-        df['S_index'] = df['Month'].map(self.s_index_map).fillna(1.0)
+            self.s_index_map = self._calculate_s_index(df.reset_index())
         
-        # Ensure Exog columns exist, fill missing with 0
+        df['Month'] = df.index.month
+        df['S_index'] = df['Month'].map(self.s_index_map).fillna(1.0)
+
+        # 4. Feature Engineering: Fourier Terms (Annual Cycle)
+        if hasattr(df.index, 'dayofyear'):
+             fourier_df = self._generate_fourier_terms(df.index)
+             for col in fourier_df.columns:
+                 df[col] = fourier_df[col]
+
+        # 5. Feature Engineering: Weather Transformations
+        # Check if raw columns exist before transforming
+        if '平均气温' in df.columns:
+            # Standardize Temperature: (T - Mean)/Std -> Temp_Std
+            # If training, we learn mean/std. If predicting, use learned.
+            if is_training:
+                self.temp_mean = df['平均气温'].mean()
+                self.temp_std = df['平均气温'].std() if df['平均气温'].std() != 0 else 1.0
+            
+            # Apply transformation
+            # Fill missing raw temp with mean first
+            # Use getattr in case temp_mean wasn't set (should involve is_training check but safe fallback)
+            t_mean = getattr(self, 'temp_mean', df['平均气温'].mean())
+            t_std = getattr(self, 'temp_std', df['平均气温'].std() if df['平均气温'].std() != 0 else 1.0)
+
+            raw_temp = df['平均气温'].fillna(t_mean)
+            df['Temp_Std'] = (raw_temp - t_mean) / t_std
+            
+        if '降雨量' in df.columns:
+            # Log Transform Rainfall: log1p(Rain) -> Rain_Log
+            # Handles skewed distribution of rainfall data
+            raw_rain = df['降雨量'].fillna(0).clip(lower=0)
+            df['Rain_Log'] = np.log1p(raw_rain)
+
+        # 6. Ensure all required columns exist (Fill Missing)
         for col in self.exog_cols:
             if col not in df.columns:
-                # S_index is already handled, skip warning for it
-                if col != 'S_index':
-                   # For missing columns (e.g. Rain/Flu), fill with 0 or mean? 0 is safer default if missing.
+                   # Critical fallback
                    df[col] = 0.0
-                   
-        # Set Date as Index for ARIMA
-        df = df.set_index(C.COL_DATE)
-        
-        # Try to infer frequency if possible (e.g. Daily 'D')
-        try:
-             df = df.asfreq(pd.infer_freq(df.index))
-             df = df.ffill() # Forward fill missing dates if gap
-        except:
-             pass # If fails, just use index as is
              
         return df
 
@@ -152,6 +219,34 @@ class ImprovedARIMA:
                  
             # Increase maxiter to help convergence
             self.model_fit = self.model.fit(method_kwargs={"maxiter": 300})
+            
+            # --- Print Model Coefficients to Verify External Factors ---
+            try:
+                # Get parameters
+                params = self.model_fit.params
+                pvalues = self.model_fit.pvalues
+                
+                # Filter for Exogenous Variables
+                exog_params = {k: v for k, v in params.items() if k in self.exog_cols}
+                
+                if exog_params:
+                    print("\n[Improved ARIMAX] External Factor Coefficients:")
+                    print("-" * 50)
+                    for factor, coef in exog_params.items():
+                        # Get p-value if available
+                        pval = pvalues.get(factor, 1.0)
+                        sig = "*" if pval < 0.05 else ""
+                        impact = "POSITIVE" if coef > 0 else "NEGATIVE"
+                        print(f"  {factor:<15}: Coef = {coef:>8.4f} (p={pval:.3f}) {sig} [{impact} Impact]")
+                    print("-" * 50)
+                    if not any(k in exog_params for k in ['Temp_Std', 'Rain_Log', '流感发病率']):
+                        print("  WARNING: Weather/Flu factors were NOT selected for this drug class (Low Volatility?)")
+                    else:
+                        print("  CONFIRMED: Weather/Flu factors are actively influencing the forecast.")
+                else:
+                     print("\n[Improved ARIMAX] No External Factors used in regression.")
+            except Exception as e:
+                print(f"Could not print coefficients: {e}")
             
             # Calculate Metrics (Weekly Average for Robustness)
             from sklearn.metrics import r2_score
@@ -242,51 +337,49 @@ class ImprovedARIMA:
 
     def predict(self, steps: int, future_exog_df: pd.DataFrame, current_stock_validity_days: float = None) -> List[float]:
         """
-        Predicts future values.
-        Args:
-            steps (int): Number of steps to predict.
-            future_exog_df (pd.DataFrame): Dataframe containing future exog features.
-            current_stock_validity_days (float, optional): Remaining validity of current batch. 
-                                                           Used for decay calculation.
+        Predicts future values using trained coefficients and FUTURE external factors.
         """
         if not self.model_fit:
             raise ValueError("Model not trained yet.")
             
-        # Prepare future exog
+        # 1. Prepare Future Exogenous Data
+        # We MUST process future_exog_df exactly like training data to get 
+        # Temp_Std, Rain_Log, S_index etc.
+        
+        # Ensure 'Date' column exists for preparation
         future_exog = future_exog_df.copy()
-        if not pd.api.types.is_datetime64_any_dtype(future_exog[C.COL_DATE]):
-            future_exog[C.COL_DATE] = pd.to_datetime(future_exog[C.COL_DATE])
-            
-        # Set index to align with model expectations
-        future_exog = future_exog.set_index(C.COL_DATE)
-            
-        # Apply Saved S_index
-        future_exog['Month'] = future_exog.index.month
-        # Use existing map or default to 1.0
-        s_map = getattr(self, 's_index_map', {m: 1.0 for m in range(1, 13)})
-        future_exog['S_index'] = future_exog['Month'].map(s_map).fillna(1.0)
+        if C.COL_DATE not in future_exog.columns and isinstance(future_exog.index, pd.DatetimeIndex):
+            future_exog = future_exog.reset_index()
+            # Rename index col to 'Date' if needed, or just use reset_index default
+            if 'index' in future_exog.columns:
+                future_exog = future_exog.rename(columns={'index': C.COL_DATE})
+
+        # Run pipeline (is_training=False to use saved params like temp_mean)
+        processed_future = self.prepare_data(future_exog, is_training=False)
         
-        # Ensure Exog columns exist
-        for col in self.exog_cols:
-            if col not in future_exog.columns:
-                if col != 'S_index':
-                    future_exog[col] = 0.0
+        # 2. Select Relevant Time Slice
+        # Assumes processed_future covers the prediction period.
+        # We need exactly 'steps' rows. 
+        # Ideally, future_exog_df starts exactly after training end.
+        exog_ready = processed_future[self.exog_cols].iloc[:steps]
         
-        # Select correct columns + rows
-        # Assumes future_exog_df is already aligned with steps or larger
-        exog_ready = future_exog[self.exog_cols].iloc[:steps]
+        if len(exog_ready) < steps:
+            # Padding if insufficient future data provided
+            pad_len = steps - len(exog_ready)
+            last_row = exog_ready.iloc[[-1]]
+            padding = pd.concat([last_row] * pad_len, ignore_index=True)
+            exog_ready = pd.concat([exog_ready, padding], axis=0).reset_index(drop=True)
+            exog_ready = exog_ready.iloc[:steps] # Trim exact
         
-        # Forecast
+        # 3. Forecast
         forecast_res = self.model_fit.forecast(steps=steps, exog=exog_ready)
         
-        # Convert series or array to list
         forecast_list = forecast_res.tolist() if hasattr(forecast_res, 'tolist') else list(forecast_res)
 
-        # Apply Validity Decay if parameters provided
+        # 4. Apply Validity Decay
         if current_stock_validity_days is not None:
              final_forecast = []
              for i, val in enumerate(forecast_list):
-                 # Validity decreases daily? Assume step=1day
                  rem_days = max(0, current_stock_validity_days - i)
                  decayed = self.entropy_weight_decay(val, rem_days, self.cv)
                  final_forecast.append(decayed)

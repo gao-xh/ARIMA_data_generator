@@ -285,47 +285,49 @@ class MCMC_Transition:
                                      C.COL_SALES: hist_df['demand'], 
                                  })
                                  
-                                 # Column Mapping for External Factors (CSV Headers -> Constants)
+                                 # Column Mapping for External Factors (CSV Headers -> Model Features)
+                                 # ImprovedARIMA expects: ['平均气温', '降雨量', '流感发病率', 'ILI%']
                                  col_map = {
-                                    '平均气温2m(℃)': C.EXT_TEMP,
-                                    '平均降水量(mm)': '平均降水量',
-                                    'ILI%': C.EXT_FLU,
-                                    '流感阳性率': '流感阳性率' 
+                                    '平均气温2m(℃)': '平均气温',
+                                    '平均降水量(mm)': '降雨量',
+                                    'ILI%': 'ILI%',
+                                    '流感发病率': '流感发病率',
+                                    C.EXT_FLU: 'ILI%' # Handle alias
                                  }
                                  
-                                 # Auto-map existing columns if present
-                                 if '平均气温' in self.external_data.columns:
-                                     col_map['平均气温'] = C.EXT_TEMP
-                                 if C.EXT_TEMP in self.external_data.columns:
-                                     col_map[C.EXT_TEMP] = C.EXT_TEMP
-                                 if C.EXT_FLU in self.external_data.columns:
-                                     col_map[C.EXT_FLU] = C.EXT_FLU
+                                 # Ensure external_data has standard Date column
+                                 ext_data_copy = self.external_data.copy()
+                                 if '日期(UTC)' in ext_data_copy.columns:
+                                     ext_data_copy = ext_data_copy.rename(columns={'日期(UTC)': C.COL_DATE})
+                                 
+                                 if C.COL_DATE not in ext_data_copy.columns and isinstance(ext_data_copy.index, pd.DatetimeIndex):
+                                     ext_data_copy = ext_data_copy.reset_index()
+                                     if 'index' in ext_data_copy.columns:
+                                         ext_data_copy = ext_data_copy.rename(columns={'index': C.COL_DATE})
+
+                                 # Rename columns to standard names expected by model
+                                 ext_data_copy = ext_data_copy.rename(columns=col_map)
 
                                  # Mask for historical data
                                  # Ensure date is Timestamp for comparison
                                  date_ts = pd.Timestamp(date)
-                                 mask = self.external_data[C.COL_DATE] < date_ts
-                                 exog_hist = self.external_data.loc[mask].copy()
-                                 exog_hist = exog_hist.reset_index(drop=True)
-
-                                 # Apply specific column renaming
-                                 exog_hist = exog_hist.rename(columns=col_map)
+                                 mask = ext_data_copy[C.COL_DATE] < date_ts
+                                 exog_hist = ext_data_copy.loc[mask].copy()
                                  
                                  # Merge for Training
+                                 # Use inner merge to only train on days where we have BOTH sales history AND external data
                                  full_train_df = pd.merge(train_df, exog_hist, on=C.COL_DATE, how='inner')
                                  
-                                 if not full_train_df.empty:
+                                 if not full_train_df.empty and len(full_train_df) > 30:
                                      # Train Model
                                      self.arima_model.train(full_train_df)
                                      
                                      # Predict Next Period (T+L)
                                      future_dates = [date_ts + pd.Timedelta(days=i) for i in range(review_period + 7)]
                                      
-                                     # Get future exog and rename
-                                     future_mask = self.external_data[C.COL_DATE].isin(future_dates)
-                                     future_exog = self.external_data[future_mask].copy()
-                                     future_exog = future_exog.reset_index(drop=True)
-                                     future_exog = future_exog.rename(columns=col_map)
+                                     # Get future exog from SAME source (ext_data_copy)
+                                     future_mask = ext_data_copy[C.COL_DATE].isin(future_dates)
+                                     future_exog = ext_data_copy[future_mask].copy()
                                      
                                      # Calculate min validity for validity decay (Nominal Fresh)
                                      current_validity_input = getattr(self.inventory_control, 'shelf_life', 365)
